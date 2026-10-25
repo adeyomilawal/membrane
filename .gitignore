@@ -1,0 +1,39 @@
+# Python
+.DS_Store
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+sdist/
+wheels/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+.venv-hatch/
+.venv-test/
+.venv-smoke/
+.venv-wheel/
+venv/
+ENV/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Local env / secrets
+.env
+.env.*
+
+# Planning & roadmap (local / internal; not shipped with the wheel)
+BUILD_PLAN.md
+future.md

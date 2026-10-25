@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://membrane.consilience.icu/schemas/kernel-memory-object/v1",
+  "title": "KernelMemoryObject",
+  "description": "Version 1 input contract for Membrane context compilation. semantic_tier matches firewall tiers: 1=procedural, 2=semantic, 3=episodic.",
+  "type": "object",
+  "required": ["payload"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable identifier for the memory row."
+    },
+    "payload": {
+      "type": "string",
+      "description": "Primary text (or stringified content) fed to layout and token estimates."
+    },
+    "relevance_score": {
+      "type": "number",
+      "minimum": 0,
+      "default": 1.0,
+      "description": "Retrieval relevance in [0, +inf); higher is more relevant."
+    },
+    "semantic_tier": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3,
+      "default": 2,
+      "description": "Firewall tier: 1 procedural, 2 semantic, 3 episodic."
+    },
+    "temporal_weight": {
+      "type": "number",
+      "minimum": 0,
+      "default": 1.0,
+      "description": "Decay-adjusted weight for ordering (1.0 = full weight)."
+    },
+    "provenance": {
+      "type": "object",
+      "default": {},
+      "description": "Opaque source metadata (store id, URI, chunk id, etc.)."
+    }
+  }
+}
