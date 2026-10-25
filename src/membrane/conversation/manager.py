@@ -48,11 +48,15 @@ class ConversationManager:
             return
         if len(self._turns) <= self._summary_trigger:
             return
-        if self._window_strategy in ("summarize", "hybrid"):
-            old = self._turns[:- self._max_turns // 2] if self._window_strategy == "hybrid" else self._turns[:-3]
-            recent = self._turns[-3:] if self._window_strategy == "hybrid" else []
-            self._summary = summarize_turns(old, self._summarization_fn)
-            self._turns = recent if self._window_strategy == "hybrid" else self._turns[-self._max_turns :]
+        # strategy is summarize or hybrid: fold older turns into the summary, keep a recent tail
+        keep = max(1, min(3, self._summary_trigger - 1))
+        old = self._turns[:-keep]
+        if not old:
+            return
+        if self._summary:
+            old = [("system", f"Previous summary: {self._summary}")] + old
+        self._summary = summarize_turns(old, self._summarization_fn)
+        self._turns = self._turns[-keep:]
 
     def get_summary(self) -> Optional[str]:
         return self._summary
@@ -88,13 +92,26 @@ class ConversationManager:
             "turns": self._turns,
             "summary": self._summary,
             "strategy": self._window_strategy,
+            "max_turns": self._max_turns,
+            "summary_trigger": self._summary_trigger,
+            "topic_aware": self._topic_aware,
         }
 
     @classmethod
-    def deserialize(cls, data: Dict[str, Any], compiler: ContextCompiler) -> ConversationManager:
+    def deserialize(
+        cls,
+        data: Dict[str, Any],
+        compiler: ContextCompiler,
+        *,
+        summarization_fn: Optional[Callable[[str], str]] = None,
+    ) -> ConversationManager:
         m = cls(
             compiler,
+            max_turns=data.get("max_turns", 50),
+            summarization_fn=summarization_fn,
             window_strategy=data.get("strategy", "hybrid"),
+            summary_trigger=data.get("summary_trigger", 10),
+            topic_aware=data.get("topic_aware", True),
         )
         m._turns = [(t[0], t[1]) for t in data.get("turns", [])]
         m._summary = data.get("summary")

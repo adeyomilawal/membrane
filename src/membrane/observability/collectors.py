@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from membrane.observability.callbacks import LoggingStructuredCallback, StructuredMetricsCallback
 from membrane.observability.events import MetricEvent, MetricKind
+
+logger = logging.getLogger(__name__)
 
 
 class MetricsCollector:
@@ -25,7 +28,7 @@ class MetricsCollector:
         try:
             self._callback.emit(event)
         except Exception:
-            pass
+            logger.exception("metrics callback failed for %s", event.name)
 
     def counter(self, name: str, value: float = 1.0, **labels: str) -> None:
         self._emit(

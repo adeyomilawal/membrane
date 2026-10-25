@@ -8,6 +8,8 @@ from typing import Any, Dict, List, TypeVar
 
 T = TypeVar("T", bound="MembraneProfile")
 
+PRESET_NAMES = ("minimal", "coding", "conversational")
+
 
 @dataclass
 class MembraneProfile:
@@ -95,6 +97,14 @@ class MembraneProfile:
             freshness=FreshnessManager(decay_fn=LinearDecay(max_age_seconds=3600.0)),
             enable_profiler=True,
         )
+
+    @classmethod
+    def preset(cls, name: str) -> MembraneProfile:
+        """Build a built-in preset by name (see ``PRESET_NAMES``)."""
+        key = (name or "minimal").strip().lower()
+        if key not in PRESET_NAMES:
+            raise ValueError(f"unknown profile {name!r}; expected one of {', '.join(PRESET_NAMES)}")
+        return getattr(cls, key)()
 
     @classmethod
     def from_yaml(cls, path: str) -> MembraneProfile:

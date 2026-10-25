@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import List, Sequence
 
 from membrane.classifier.features import FEATURE_DIM, extract_features
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryKind(str, Enum):
@@ -94,7 +97,7 @@ class MemoryClassifier:
                 if isinstance(b, list) and len(b) == 5:
                     self._biases = [float(x) for x in b]
             except Exception:
-                pass
+                logger.warning("failed to load classifier weights from %s; using defaults", p, exc_info=True)
 
     def classify(self, text: str) -> ClassificationResult:
         feats = extract_features(text)

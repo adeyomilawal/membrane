@@ -22,34 +22,64 @@ class PolicyCondition:
         model_id: Optional[str],
     ) -> bool:
         d = self.raw
-        if d is True or d == "always" or (isinstance(d, dict) and d.get("always")):
+        if d is True or d == "always":
             return True
         if not isinstance(d, dict):
             return False
-        if "query_contains_any" in d:
-            needles = d["query_contains_any"]
-            q = query.lower()
-            return any(str(n).lower() in q for n in needles)
-        if "query_contains_all" in d:
-            needles = d["query_contains_all"]
-            q = query.lower()
-            return all(str(n).lower() in q for n in needles)
-        if "query_length_below" in d:
-            return len(query) < int(d["query_length_below"])
-        if "query_length_above" in d:
-            return len(query) > int(d["query_length_above"])
-        if "memory_count_below" in d:
-            return len(memories) < int(d["memory_count_below"])
-        if "memory_count_above" in d:
-            return len(memories) > int(d["memory_count_above"])
-        if "estimated_tokens_above" in d:
-            return estimated_tokens > int(d["estimated_tokens_above"])
-        if "estimated_tokens_below" in d:
-            return estimated_tokens < int(d["estimated_tokens_below"])
-        if "model_is" in d:
-            mid = d["model_is"]
-            return (model_id or "") == mid or (model_id or "").startswith(mid)
-        return False
+        if "always" in d and not d["always"]:
+            return False
+        q = query.lower()
+        mid = model_id or ""
+        # every recognized key must hold (AND)
+        if "query_contains_any" in d and not any(str(n).lower() in q for n in d["query_contains_any"]):
+            return False
+        if "query_contains_all" in d and not all(str(n).lower() in q for n in d["query_contains_all"]):
+            return False
+        if "query_length_below" in d and not len(query) < int(d["query_length_below"]):
+            return False
+        if "query_length_above" in d and not len(query) > int(d["query_length_above"]):
+            return False
+        if "memory_count_below" in d and not len(memories) < int(d["memory_count_below"]):
+            return False
+        if "memory_count_above" in d and not len(memories) > int(d["memory_count_above"]):
+            return False
+        if "estimated_tokens_above" in d and not estimated_tokens > int(d["estimated_tokens_above"]):
+            return False
+        if "estimated_tokens_below" in d and not estimated_tokens < int(d["estimated_tokens_below"]):
+            return False
+        if "model_is" in d and not (mid == d["model_is"] or mid.startswith(d["model_is"])):
+            return False
+        return True
+
+
+_LIST_KEYS = ("query_contains_any", "query_contains_all")
+_INT_KEYS = (
+    "query_length_below",
+    "query_length_above",
+    "memory_count_below",
+    "memory_count_above",
+    "estimated_tokens_above",
+    "estimated_tokens_below",
+)
+_CONDITION_KEYS = frozenset(("always", "model_is") + _LIST_KEYS + _INT_KEYS)
+
+
+def _validate_condition(policy_name: str, cond: Dict[str, Any]) -> None:
+    """Raise ``ValueError`` for empty, unknown-key, or malformed conditions."""
+    unknown = sorted(set(cond) - _CONDITION_KEYS)
+    if unknown or not cond:
+        raise ValueError(f"policy {policy_name!r}: unrecognized condition keys {unknown or list(cond)}")
+    for k in _LIST_KEYS:
+        if k in cond and (not isinstance(cond[k], (list, tuple)) or not cond[k]):
+            raise ValueError(f"policy {policy_name!r}: {k} must be a non-empty list")
+    for k in _INT_KEYS:
+        if k in cond:
+            try:
+                int(cond[k])
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"policy {policy_name!r}: {k} must be an integer") from e
+    if "model_is" in cond and not isinstance(cond["model_is"], str):
+        raise ValueError(f"policy {policy_name!r}: model_is must be a string")
 
 
 @dataclass
@@ -90,12 +120,13 @@ class PolicyEngine:
                 continue
             name = str(item.get("name", "anonymous"))
             cr = item.get("condition")
-            if cr == "always" or cr is True:
+            if cr is None or cr == "always" or cr is True:
                 cond_raw: Any = {"always": True}
             elif isinstance(cr, dict):
+                _validate_condition(name, cr)
                 cond_raw = cr
             else:
-                cond_raw = {"always": True}
+                raise ValueError(f"policy {name!r}: malformed condition {cr!r}")
             cond = PolicyCondition(raw=cond_raw)
             actions_raw = item.get("actions") or []
             actions = [PolicyAction(raw=a) if isinstance(a, dict) else PolicyAction(raw={}) for a in actions_raw]

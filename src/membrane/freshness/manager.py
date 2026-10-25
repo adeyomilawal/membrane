@@ -69,14 +69,30 @@ class FreshnessManager:
         weight_setter: Optional[Callable[[Any, float], None]] = None,
     ) -> Sequence[Any]:
         scores = self.score(memories, timestamp_fn=timestamp_fn)
-        wfn = weight_fn or (lambda m: float(getattr(m, "relevance_score", 1.0) or 1.0))
+        wfn = weight_fn or self._default_weight
         setter = weight_setter or self._default_set_weight
         for m, fr in zip(memories, scores):
-            setattr(m, "_membrane_freshness_score", fr.freshness_score)
-            setattr(m, "_membrane_is_stale", bool(fr.is_stale))
-            base = wfn(m)
+            self._try_setattr(m, "_membrane_freshness_score", fr.freshness_score)
+            self._try_setattr(m, "_membrane_is_stale", bool(fr.is_stale))
+            # base score is stored on first application so repeated calls do not compound decay
+            base = getattr(m, "_membrane_base_weight", None)
+            if base is None:
+                base = wfn(m)
+                self._try_setattr(m, "_membrane_base_weight", base)
             setter(m, base * fr.freshness_score)
         return memories
+
+    @staticmethod
+    def _default_weight(m: Any) -> float:
+        w = getattr(m, "relevance_score", None)
+        return 1.0 if w is None else float(w)
+
+    @staticmethod
+    def _try_setattr(m: Any, name: str, value: Any) -> None:
+        try:
+            setattr(m, name, value)
+        except Exception:
+            pass  # frozen / slotted objects reject new attributes
 
     @staticmethod
     def _default_set_weight(m: Any, w: float) -> None:
@@ -84,9 +100,9 @@ class FreshnessManager:
             try:
                 m.relevance_score = w
             except Exception:
-                setattr(m, "relevance_score", w)
+                FreshnessManager._try_setattr(m, "_membrane_freshness_weight", w)
         else:
-            setattr(m, "_membrane_freshness_weight", w)
+            FreshnessManager._try_setattr(m, "_membrane_freshness_weight", w)
 
     def flag_stale(
         self,

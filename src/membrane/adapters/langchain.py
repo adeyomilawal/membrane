@@ -24,6 +24,13 @@ def _memory_type(value: Any) -> MemoryType:
     return "semantic"
 
 
+def _priority(value: Any) -> int:
+    try:
+        return max(1, min(3, int(value)))
+    except (TypeError, ValueError):
+        return 2
+
+
 def langchain_doc_to_memory(doc: Any) -> MemoryItem:
     """Convert a LangChain ``Document`` to :class:`~membrane.memory_protocol.MemoryItem`."""
     try:
@@ -36,7 +43,7 @@ def langchain_doc_to_memory(doc: Any) -> MemoryItem:
         id=str(doc.metadata.get("id", doc.metadata.get("source", "doc"))),
         content=doc.page_content,
         memory_type=_memory_type(doc.metadata.get("memory_type", "semantic")),
-        priority=int(doc.metadata.get("priority", 2)),
+        priority=_priority(doc.metadata.get("priority", 2)),
     )
 
 
@@ -78,7 +85,9 @@ class MembranePromptTemplate:
         )
         msgs = getattr(res, "messages", []) or []
         core = "\n".join(str(m.get("content", "")) for m in msgs if isinstance(m, dict))
-        return self._template.format(compiled_context=core, **kwargs)
+        fmt_kwargs = dict(kwargs)
+        fmt_kwargs["compiled_context"] = core
+        return self._template.format(**fmt_kwargs)
 
 
 def disable_langchain_memory(chain: Any) -> Any:

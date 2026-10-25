@@ -87,20 +87,7 @@ def load_memories(memory_args: Sequence[str] | None, memory_json: str | None) ->
 def resolve_profile_name(name: str | None) -> Any:
     if not name:
         return None
-    normalized = name.strip().lower()
-    if normalized == "minimal":
-        return MembraneProfile.minimal()
-    if normalized == "coding":
-        return MembraneProfile.coding()
-    if normalized == "conversational":
-        return MembraneProfile.conversational()
-    if normalized == "research":
-        return MembraneProfile.research()
-    if normalized == "full":
-        return MembraneProfile.full()
-    if normalized == "enterprise":
-        return MembraneProfile.enterprise()
-    raise ValueError(f"unknown profile {name!r}")
+    return MembraneProfile.preset(name)
 
 
 def build_compiler(*, max_tokens: int, model: str | None, core: str) -> ContextCompiler:

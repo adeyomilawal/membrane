@@ -48,42 +48,40 @@ def _pack_units(
     buf_start: Optional[int] = None
     buf_end = 0
     buf_tokens = 0
+
+    def flush() -> None:
+        nonlocal buf_parts, buf_start, buf_tokens
+        if buf_parts and buf_start is not None:
+            content = "\n".join(buf_parts).strip()
+            chunks.append(Chunk(content, tok(content), buf_start, buf_end, {"strategy": label}))
+        buf_parts = []
+        buf_start = None
+        buf_tokens = 0
+
     for start, end in spans:
-        piece = text[start:end].strip()
+        raw = text[start:end]
+        piece = raw.strip()
         if not piece:
             continue
         t = tok(piece)
+        if t > max_tokens:
+            # unit alone exceeds the budget: flush the buffer, then split the unit itself
+            flush()
+            base = start + (len(raw) - len(raw.lstrip()))
+            for sub in FixedStrategy().chunk(piece, max_tokens=max_tokens, tokenizer=tok):
+                sub.start_char += base
+                sub.end_char += base
+                sub.metadata["strategy"] = label
+                chunks.append(sub)
+            continue
+        if buf_parts and buf_tokens + t > max_tokens:
+            flush()
         if buf_start is None:
             buf_start = start
-        if buf_tokens + t > max_tokens and buf_parts:
-            content = "\n".join(buf_parts).strip()
-            start_char = buf_start if buf_start is not None else start
-            chunks.append(
-                Chunk(
-                    content,
-                    tok(content),
-                    start_char,
-                    buf_end,
-                    {"strategy": label},
-                )
-            )
-            buf_parts = []
-            buf_start = start
-            buf_tokens = 0
         buf_parts.append(piece)
         buf_tokens += t
         buf_end = end
-    if buf_parts and buf_start is not None:
-        content = "\n".join(buf_parts).strip()
-        chunks.append(
-            Chunk(
-                content,
-                tok(content),
-                buf_start,
-                buf_end,
-                {"strategy": label},
-            )
-        )
+    flush()
     return chunks
 
 
@@ -132,6 +130,7 @@ class FixedStrategy:
         chunks: List[Chunk] = []
         if max_tokens <= 0:
             return chunks
+        ov_tokens = max(0, min(overlap_tokens, max_tokens - 1))
         start = 0
         n = len(text)
         while start < n:
@@ -149,8 +148,20 @@ class FixedStrategy:
             chunks.append(Chunk(seg, tok(seg), start, end, {"strategy": "fixed"}))
             if end >= n:
                 break
-            adv = max(1, end - start - overlap_tokens)
-            start += adv
+            # overlap is measured in tokens but applied in characters: find the tail of this
+            # chunk holding at most ``ov_tokens`` tokens, and never overlap the whole chunk
+            seg_len = end - start
+            ov_chars = 0
+            if ov_tokens > 0:
+                lo, hi = 0, seg_len
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if tok(seg[mid:]) <= ov_tokens:
+                        hi = mid
+                    else:
+                        lo = mid + 1
+                ov_chars = min(seg_len - lo, seg_len - 1)
+            start += max(1, seg_len - ov_chars)
         return chunks
 
 
@@ -173,6 +184,15 @@ class RecursiveStrategy:
                 tokenizer=tok,
             )
         chunks: List[Chunk] = []
+        if hd[0][0] > 0 and text[: hd[0][0]].strip():
+            # text before the first heading
+            for c in ParagraphStrategy().chunk(
+                text[: hd[0][0]],
+                max_tokens=max_tokens,
+                overlap_tokens=overlap_tokens,
+                tokenizer=tok,
+            ):
+                chunks.append(c)
         for i, (s, e, level) in enumerate(hd):
             nxt = hd[i + 1][0] if i + 1 < len(hd) else len(text)
             block = text[s:nxt]
@@ -184,6 +204,9 @@ class RecursiveStrategy:
             )
             for c in sub:
                 c.metadata["heading_level"] = level
+                # offsets are block-relative; report them against the whole document
+                c.start_char += s
+                c.end_char += s
             chunks.extend(sub)
         return chunks
 

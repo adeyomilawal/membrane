@@ -7,10 +7,15 @@ import re
 from typing import List
 
 
-_CODE_BLOCK = re.compile(r"```|`|def |class |import |SELECT |FROM ", re.I)
+# case-sensitive and code-shaped so prose like "I got this from John" does not match
+_CODE_BLOCK = re.compile(
+    r"```|`|\bdef \w+\(|\bclass \w+\s*[:(]|^\s*import [\w.]+(?:\s+as \w+)?\s*$"
+    r"|^\s*from [\w.]+ import \w|\bSELECT\b[^;\n]*\bFROM\b",
+    re.M,
+)
 _LIST = re.compile(r"^\s*[\d]+[\.\)]\s+|^\s*[-*]\s+", re.M)
 _TEMPORAL = re.compile(
-    r"\b(yesterday|last week|last month|remember when|i recall|conversation|you said|user:|assistant:)\b",
+    r"\b(yesterday|last week|last month|remember when|i recall|conversation|you said)\b|\b(?:user|assistant):",
     re.I,
 )
 _DEF = re.compile(r"\b(is a |is an |defined as|refers to|means )\b", re.I)

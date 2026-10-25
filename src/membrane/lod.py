@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from membrane import config as os_config
 
 logger = logging.getLogger(__name__)
 
-_embedding_model = None
+_embedding_model: Any = None
 
 
 def _get_embedding_model():
@@ -22,7 +22,7 @@ def _get_embedding_model():
             _embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
         except Exception as e:
             logger.warning("fastembed not available for LOD (%s); attention_shift will be False", e)
-            _embedding_model = False  # type: ignore[assignment]
+            _embedding_model = False
     return _embedding_model
 
 

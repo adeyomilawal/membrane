@@ -8,6 +8,11 @@ Run (stdio, for Cursor / Claude Desktop):
 .. code-block:: bash
 
    python -m membrane.adapters.mcp_server
+
+**Single-client only:** the server keeps one session's state (last compile result, metrics
+snapshot, conversation history) on the instance, shared by every connection. Use stdio (one
+client per process). The SSE transport serves multiple connections from the same state and
+has no authentication; do not expose it beyond loopback.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
-from membrane.profile import MembraneProfile
+from membrane.profile import PRESET_NAMES, MembraneProfile
 
 from membrane.adapters import mcp_resources
 
@@ -46,16 +51,7 @@ def _require_mcp():
 
 
 def _resolve_profile(name: str) -> Any:
-    key = (name or "minimal").strip().lower()
-    if key == "coding":
-        return MembraneProfile.coding()
-    if key == "research":
-        return MembraneProfile.research(reranker=True)
-    if key == "conversational":
-        return MembraneProfile.conversational()
-    if key == "full":
-        return MembraneProfile.full()
-    return MembraneProfile.minimal()
+    return MembraneProfile.preset(name)
 
 
 async def _maybe_await(res: Any) -> Any:
@@ -70,6 +66,10 @@ class MembraneMCPServer:
     ``membrane_compile_conversation`` for multi-turn state via :class:`~membrane.conversation.manager.ConversationManager`.
 
     Resources: ``membrane://profiles``, ``membrane://last_compile``, ``membrane://metrics``.
+
+    **Single-client:** one instance holds one session's state (last result, metrics, conversation
+    history) that all callers share. It is meant for a single client over stdio; run one process
+    per client rather than sharing an SSE endpoint.
     """
 
     def __init__(
@@ -93,6 +93,23 @@ class MembraneMCPServer:
         self.port = port
         self._last_result: Optional[Any] = None
         self._metrics_snapshot: Dict[str, Any] = {}
+
+    def _pick_profile(self, arguments: Dict[str, Any]) -> tuple:
+        """Per-call ``profile`` wins over the server default; returns ``(profile, name_used)``."""
+        if arguments.get("profile"):
+            name = str(arguments["profile"])
+            return _resolve_profile(name), name
+        if self._default_profile is not None:
+            return self._default_profile, "default"
+        return _resolve_profile("coding"), "coding"
+
+    def _warn_if_exposed(self) -> None:
+        if str(self.host).strip("[]").lower() not in ("localhost", "127.0.0.1", "::1"):
+            logger.warning(
+                "SSE transport on non-loopback host %r: this server shares one session's state "
+                "across all clients and has no authentication",
+                self.host,
+            )
 
     def _get_conversation_manager(self) -> Any:
         if self._conversation_manager is not None:
@@ -122,8 +139,8 @@ class MembraneMCPServer:
                         },
                         "profile": {
                             "type": "string",
-                            "enum": ["minimal", "coding", "research", "conversational", "full"],
-                            "default": "research",
+                            "enum": list(PRESET_NAMES),
+                            "default": "coding",
                         },
                         "model": {"type": "string", "default": "gpt-4o"},
                         "max_tokens": {"type": "integer", "default": 8192},
@@ -155,8 +172,8 @@ class MembraneMCPServer:
                             },
                             "profile": {
                                 "type": "string",
-                                "enum": ["minimal", "coding", "research", "conversational", "full"],
-                                "default": "research",
+                                "enum": list(PRESET_NAMES),
+                                "default": "coding",
                             },
                             "model": {"type": "string", "default": "gpt-4o"},
                             "max_tokens": {"type": "integer", "default": 8192},
@@ -183,12 +200,11 @@ class MembraneMCPServer:
     async def _compile_tool(self, arguments: Dict[str, Any]) -> str:
         query = str(arguments.get("query", ""))
         uris = arguments.get("memory_uris") or []
-        prof_name = str(arguments.get("profile", "research"))
         model = str(arguments.get("model", "gpt-4o"))
         max_tokens = int(arguments.get("max_tokens", 8192))
 
         mems = await self._fetch_memories(uris)
-        prof = self._default_profile or _resolve_profile(prof_name)
+        prof, prof_name = self._pick_profile(arguments)
 
         comp = self._compiler
         prev_model = getattr(comp, "model_id", None)
@@ -226,12 +242,11 @@ class MembraneMCPServer:
     async def _compile_conversation_tool(self, arguments: Dict[str, Any]) -> str:
         user_message = str(arguments.get("user_message", ""))
         uris = arguments.get("memory_uris") or []
-        prof_name = str(arguments.get("profile", "research"))
         model = str(arguments.get("model", "gpt-4o"))
         max_tokens = int(arguments.get("max_tokens", 8192))
 
         mems = await self._fetch_memories(uris)
-        prof = self._default_profile or _resolve_profile(prof_name)
+        prof, prof_name = self._pick_profile(arguments)
         cm = self._get_conversation_manager()
         cm.add_turn("user", user_message)
 
@@ -377,6 +392,7 @@ class MembraneMCPServer:
             )
 
     async def _serve_sse(self) -> None:
+        self._warn_if_exposed()
         try:
             import uvicorn  # type: ignore
         except ImportError as e:

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from membrane.firewall import count_tokens
+
+logger = logging.getLogger(__name__)
+
+_MODEL: Any = None
+_MODEL_FAILED = False
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
@@ -30,14 +36,30 @@ def _hash_embed(text: str, dim: int = 32) -> List[float]:
     return out
 
 
-def _default_embed_batch(texts: List[str], dim: int = 32) -> List[List[float]]:
-    try:
-        from fastembed import TextEmbedding  # type: ignore
+def _get_model() -> Any:
+    """Load the fastembed model once per process; ``None`` if unavailable."""
+    global _MODEL, _MODEL_FAILED
+    if _MODEL is None and not _MODEL_FAILED:
+        try:
+            from fastembed import TextEmbedding  # type: ignore
 
-        model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        return [list(e) for e in model.embed(texts)]
-    except Exception:
-        return [_hash_embed(t, dim) for t in texts]
+            _MODEL = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        except Exception:
+            _MODEL_FAILED = True
+            logger.warning("fastembed unavailable; dedup falls back to hash embeddings", exc_info=True)
+    return _MODEL
+
+
+def _default_embed_batch(texts: List[str], dim: int = 32) -> List[List[float]]:
+    model = _get_model()
+    if model is not None:
+        try:
+            return [list(e) for e in model.embed(texts)]
+        except Exception:
+            logger.warning("fastembed embedding failed; using hash embeddings", exc_info=True)
+    else:
+        logger.warning("using hash embeddings for dedup (similarity is not semantic)")
+    return [_hash_embed(t, dim) for t in texts]
 
 
 @dataclass
@@ -89,28 +111,17 @@ class SemanticDeduplicator:
             )
         vecs = self._embed(texts)
         n = len(memories)
-        parent = list(range(n))
 
-        def find(i: int) -> int:
-            while parent[i] != i:
-                parent[i] = parent[parent[i]]
-                i = parent[i]
-            return i
-
-        def union(i: int, j: int) -> None:
-            ri, rj = find(i), find(j)
-            if ri != rj:
-                parent[rj] = ri
-
-        for i in range(n):
-            for j in range(i + 1, n):
-                if _cosine(vecs[i], vecs[j]) >= self._threshold:
-                    union(i, j)
-
+        # compare each item against cluster representatives (first member) only, so
+        # similarity is never chained transitively through intermediate items
         clusters_map: Dict[int, List[int]] = {}
         for i in range(n):
-            r = find(i)
-            clusters_map.setdefault(r, []).append(i)
+            for rep, members in clusters_map.items():
+                if _cosine(vecs[rep], vecs[i]) >= self._threshold:
+                    members.append(i)
+                    break
+            else:
+                clusters_map[i] = [i]
 
         kept_idx: List[int] = []
         removed_idx: List[int] = []

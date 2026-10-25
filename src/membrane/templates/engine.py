@@ -87,21 +87,23 @@ class PromptTemplate:
     def validate(self, **kwargs: Any) -> List[str]:
         return [name for name in self._collect_vars(self._ast) if name not in kwargs]
 
-    def _collect_vars(self, nodes: List[Any]) -> List[str]:
+    def _collect_vars(self, nodes: List[Any], bound: frozenset = frozenset()) -> List[str]:
         names: List[str] = []
         for n in nodes:
             if isinstance(n, VarNode):
-                names.append(n.name)
+                if n.name not in bound:
+                    names.append(n.name)
             elif isinstance(n, IfNode):
-                names.extend(self._collect_vars(n.children))
-                names.append(n.condition.strip())
+                # conditions are optional (absent = falsy); only body variables are required
+                names.extend(self._collect_vars(n.children, bound))
             elif isinstance(n, ForNode):
-                names.append(n.seq)
-                names.extend(self._collect_vars(n.children))
+                if n.seq not in bound:
+                    names.append(n.seq)
+                names.extend(self._collect_vars(n.children, bound | {n.item}))
             elif isinstance(n, RoleBlockNode):
-                names.extend(self._collect_vars(n.children))
+                names.extend(self._collect_vars(n.children, bound))
             elif isinstance(n, BlockNode):
-                names.extend(self._collect_vars(n.children))
+                names.extend(self._collect_vars(n.children, bound))
         return names
 
     def render(
@@ -123,31 +125,32 @@ class PromptTemplate:
         return self._render_nodes(self._ast, ctx)
 
     def _render_nodes(self, nodes: List[Any], ctx: Dict[str, Any]) -> List[Dict[str, str]]:
-        by_role: Dict[str, List[str]] = {"system": [], "user": [], "assistant": []}
+        # each segment: [role, parts, is_role_block]; role blocks never merge with neighbours
+        segments: List[List[Any]] = []
         for n in nodes:
-            self._render_node(n, ctx, by_role)
+            self._render_node(n, ctx, segments)
         out: List[Dict[str, str]] = []
-        for role in ("system", "user", "assistant"):
-            if by_role[role]:
-                out.append({"role": role, "content": "".join(by_role[role]).strip()})
+        for role, parts, _ in segments:
+            content = "".join(parts).strip()
+            if content:
+                out.append({"role": role, "content": content})
         return out
 
     def _render_node(
         self,
         n: Any,
         ctx: Dict[str, Any],
-        by_role: Dict[str, List[str]],
-        current_role: str = "system",
+        segments: List[List[Any]],
     ) -> None:
         if isinstance(n, TextNode):
-            by_role[current_role].append(n.text)
+            self._current(segments).append(n.text)
         elif isinstance(n, VarNode):
             val = ctx.get(n.name, "")
-            by_role[current_role].append(str(val))
+            self._current(segments).append(str(val))
         elif isinstance(n, IfNode):
             if self._truthy(n.condition, ctx):
                 for c in n.children:
-                    self._render_node(c, ctx, by_role, current_role)
+                    self._render_node(c, ctx, segments)
         elif isinstance(n, ForNode):
             seq = ctx.get(n.seq, [])
             if not isinstance(seq, list):
@@ -156,13 +159,22 @@ class PromptTemplate:
                 sub = dict(ctx)
                 sub[n.item] = item
                 for c in n.children:
-                    self._render_node(c, sub, by_role, current_role)
+                    self._render_node(c, sub, segments)
         elif isinstance(n, RoleBlockNode):
+            segments.append([n.role, [], True])
             for c in n.children:
-                self._render_node(c, ctx, by_role, n.role)
+                self._render_node(c, ctx, segments)
+            # text after the block starts a fresh implicit system segment
+            segments.append(["system", [], False])
         elif isinstance(n, BlockNode):
             for c in n.children:
-                self._render_node(c, ctx, by_role, current_role)
+                self._render_node(c, ctx, segments)
+
+    @staticmethod
+    def _current(segments: List[List[Any]]) -> List[str]:
+        if not segments:
+            segments.append(["system", [], False])
+        return segments[-1][1]
 
     def _truthy(self, cond: str, ctx: Dict[str, Any]) -> bool:
         c = cond.strip()

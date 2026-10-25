@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from membrane.profile import PRESET_NAMES
 
-_PROFILE_NAMES = ("minimal", "coding", "research", "conversational", "full")
+
+_PROFILE_NAMES = PRESET_NAMES
 
 
 def list_profile_resource_text() -> str:

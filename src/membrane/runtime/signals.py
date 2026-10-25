@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+
+logger = logging.getLogger(__name__)
 
 
 class SignalKind(str, Enum):
@@ -50,18 +54,13 @@ class SignalBus:
             pass
 
     async def emit(self, signal: Signal) -> Optional[str]:
-        import asyncio
-
-        for h in self._handlers.get(signal.kind, []):
+        for h in list(self._handlers.get(signal.kind, [])):
             try:
-                if hasattr(h, "handle"):
-                    result = await h.handle(signal)
-                elif asyncio.iscoroutinefunction(h):
-                    result = await h(signal)
-                else:
-                    result = h(signal)
+                result = h.handle(signal) if hasattr(h, "handle") else h(signal)
+                if inspect.isawaitable(result):
+                    result = await result
                 if result is not None:
                     return result
             except Exception:
-                continue
+                logger.exception("signal handler %r failed for %s", h, signal.kind.value)
         return None

@@ -30,8 +30,9 @@ class TokenizerRegistry:
     @classmethod
     def get(cls) -> "TokenizerRegistry":
         if cls._instance is None:
-            cls._instance = cls()
-            cls._instance._bootstrap_defaults()
+            inst = cls()
+            inst._bootstrap_defaults()
+            cls._instance = inst
         return cls._instance
 
     @classmethod
@@ -41,15 +42,21 @@ class TokenizerRegistry:
     def _bootstrap_defaults(self) -> None:
         from membrane.tokenizers.adapters import EstimationAdapter, TiktokenAdapter
 
-        self.register("gpt-3.5*", TiktokenAdapter("cl100k_base"))
-        self.register("gpt-4*", TiktokenAdapter("o200k_base"))
-        self.register("gpt-4o*", TiktokenAdapter("o200k_base"))
-        self.register("anthropic/*", TiktokenAdapter("cl100k_base"))
-        self.register("claude*", TiktokenAdapter("cl100k_base"))
+        # defaults are appended (lowest precedence); first match wins, so specific before broad
+        defaults = [
+            ("gpt-3.5*", TiktokenAdapter("cl100k_base")),
+            ("gpt-4o*", TiktokenAdapter("o200k_base")),
+            ("gpt-4.1*", TiktokenAdapter("o200k_base")),
+            ("gpt-4*", TiktokenAdapter("cl100k_base")),
+            ("anthropic/*", TiktokenAdapter("cl100k_base")),
+            ("claude*", TiktokenAdapter("cl100k_base")),
+        ]
+        self._patterns.extend(defaults)
         self._default = EstimationAdapter()
 
     def register(self, model_pattern: str, adapter: TokenizerAdapter) -> None:
-        self._patterns.append((model_pattern, adapter))
+        # user patterns take precedence over defaults (and over earlier user patterns)
+        self._patterns.insert(0, (model_pattern, adapter))
 
     def _match(self, model_id: str) -> Optional[TokenizerAdapter]:
         for pat, adapter in self._patterns:
