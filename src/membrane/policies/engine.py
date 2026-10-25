@@ -64,6 +64,29 @@ _INT_KEYS = (
 _CONDITION_KEYS = frozenset(("always", "model_is") + _LIST_KEYS + _INT_KEYS)
 
 
+_ACTION_KEYS = frozenset(
+    ("set_budget", "set_max_tokens", "set_compression_target", "pin_memory_kind", "enable", "disable", "override")
+)
+_MEMORY_KINDS = frozenset(("procedural", "semantic", "episodic"))
+
+
+def _validate_action(policy_name: str, action: Any) -> None:
+    """Raise ``ValueError`` for non-dict actions, unknown action keys, or unknown memory kinds."""
+    if not isinstance(action, dict) or not action:
+        raise ValueError(f"policy {policy_name!r}: malformed action {action!r}")
+    unknown = sorted(set(action) - _ACTION_KEYS)
+    if unknown:
+        raise ValueError(f"policy {policy_name!r}: unrecognized action keys {unknown}")
+    kinds = list((action.get("set_budget") or {}).keys())
+    if "pin_memory_kind" in action:
+        kinds.append(action["pin_memory_kind"])
+    bad = sorted(str(k) for k in kinds if k not in _MEMORY_KINDS)
+    if bad:
+        raise ValueError(f"policy {policy_name!r}: action names unknown memory kinds {bad}")
+    if "override" in action and not isinstance(action["override"], dict):
+        raise ValueError(f"policy {policy_name!r}: action 'override' must be a mapping")
+
+
 def _validate_condition(policy_name: str, cond: Dict[str, Any]) -> None:
     """Raise ``ValueError`` for empty, unknown-key, or malformed conditions."""
     unknown = sorted(set(cond) - _CONDITION_KEYS)
@@ -119,8 +142,10 @@ class PolicyEngine:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name", "anonymous"))
+            if "condition" not in item:
+                raise ValueError(f"policy {name!r}: missing condition (use \"always\" to match every request)")
             cr = item.get("condition")
-            if cr is None or cr == "always" or cr is True:
+            if cr == "always" or cr is True:
                 cond_raw: Any = {"always": True}
             elif isinstance(cr, dict):
                 _validate_condition(name, cr)
@@ -129,7 +154,9 @@ class PolicyEngine:
                 raise ValueError(f"policy {name!r}: malformed condition {cr!r}")
             cond = PolicyCondition(raw=cond_raw)
             actions_raw = item.get("actions") or []
-            actions = [PolicyAction(raw=a) if isinstance(a, dict) else PolicyAction(raw={}) for a in actions_raw]
+            for a in actions_raw:
+                _validate_action(name, a)
+            actions = [PolicyAction(raw=a) for a in actions_raw]
             pr = int(item.get("priority", 0))
             policies.append(Policy(name=name, condition=cond, actions=actions, priority=pr))
         return cls(policies)

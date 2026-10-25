@@ -143,6 +143,17 @@ def get_default_redis_url() -> Optional[str]:
     return url.strip() if url else None
 
 
+def get_memory_text_max_chars() -> Optional[int]:
+    """``MEMBRANE_MEMORY_TEXT_MAX_CHARS``: cap on each memory's text in the prompt.
+
+    Unset keeps the built-in limits (200 chars for facts, 280 for episodes, 500 for
+    procedures); ``0`` disables truncation.
+    """
+    if os.environ.get("MEMBRANE_MEMORY_TEXT_MAX_CHARS") is None:
+        return None
+    return max(0, _int_env("MEMBRANE_MEMORY_TEXT_MAX_CHARS", 0))
+
+
 def get_llm_capability_map_path() -> Optional[str]:
     """Override path to llm_capabilities.json; None = bundled package data."""
     path = os.environ.get("LLM_CAPABILITY_MAP_PATH")

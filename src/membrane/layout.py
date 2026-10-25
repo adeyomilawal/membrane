@@ -21,6 +21,8 @@ class ContextLayoutEngine:
     ):
         self.core_content = core_content or ""
         self.system_directives = system_directives or ""
+        # Memories whose text was shortened by the last build_middle() call.
+        self.last_truncated_count = 0
 
     def set_system_directives(self, directives: str) -> None:
         """Inject dynamic directives (e.g. metacognition) for end-of-system placement."""
@@ -54,9 +56,11 @@ class ContextLayoutEngine:
         segments: List[Tuple[str, int]] = []
         ref_map: Dict[int, str] = {}
         ref_map_type: Dict[int, str] = {}
+        self.last_truncated_count = 0
         for i, (obj, tier) in enumerate(retrieved):
             local_idx = start_index + i
-            line = DenseSerializer.format(obj, local_index=local_idx)
+            line, truncated = DenseSerializer.format_checked(obj, local_index=local_idx)
+            self.last_truncated_count += int(truncated)
             kind = infer_memory_kind(obj)
             # Episodic/procedural already start with [Mem:N]; semantic [fact] lines get the prefix here
             if kind == "semantic" and not line.strip().startswith("[Mem:"):

@@ -42,7 +42,9 @@ All notable changes to this project are documented here. The format is based on 
 - MCP server: documented as single-client; warns when SSE binds to a non-loopback host; per-call profiles override the default.
 - Signal bus and metrics collector: handler errors are logged, and sync handlers work.
 
-Known limits: the firewall counts with tiktoken even when a profile sets a tokenizer registry, and dense serialization truncates long memory text (200 chars for facts, 280 for episodes).
+- The firewall counts with the profile's tokenizer registry when one is set, so the budget matches `token_count`. `PreFlightContextFirewall(count_fn=...)` accepts any counter.
+- Memory text limits are configurable: `MEMBRANE_MEMORY_TEXT_MAX_CHARS` overrides the built-in 200/280/500-character limits, and `0` disables truncation. `metadata["memories_truncated"]` reports how many memories were shortened.
+- Policy actions now take effect: `set_budget` gives each memory kind a first-pass share of the middle (unused space goes to the others), `pin_memory_kind` keeps that kind first, `enable` reverses an earlier `disable`, and `set_max_tokens` / `override: {max_tokens}` set the budget, bounded by the model's context cap. **Breaking:** a policy without a `condition` now raises `ValueError` (write `condition: always`), and unknown action keys or memory kinds raise.
 
 ## [0.1.1] — 2026-04-11
 

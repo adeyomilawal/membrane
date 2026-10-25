@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import AbstractSet, Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import membrane.config as os_config
 
@@ -85,8 +85,11 @@ class PreFlightContextFirewall:
         max_tokens: int,
         preflight_token_threshold: Optional[int] = None,
         preflight_target_tokens: Optional[int] = None,
+        count_fn: Optional[Callable[[str], int]] = None,
     ):
         self.max_tokens = max_tokens
+        # Counts with the caller's tokenizer when given, so the budget matches what is reported.
+        self._count = count_fn or count_tokens
         self.preflight_threshold = (
             preflight_token_threshold
             if preflight_token_threshold is not None
@@ -106,6 +109,8 @@ class PreFlightContextFirewall:
         ref_map: Optional[Dict[int, str]] = None,
         *,
         segment_weights: Optional[Sequence[Union[float, int]]] = None,
+        tier_shares: Optional[Mapping[int, float]] = None,
+        pinned_tiers: Optional[AbstractSet[int]] = None,
     ) -> Tuple[str, Dict[int, str], int, Dict[str, Any]]:
         """
         Build final context string under max_tokens; trim middle by priority.
@@ -117,9 +122,14 @@ class PreFlightContextFirewall:
         Returns:
             (assembled_text, ref_map_kept, total_tokens, stats)
 
+        ``tier_shares`` maps a tier to the fraction of the middle budget it may use in a first
+        pass; space a tier leaves unused is filled by the others in a second pass.
+        ``pinned_tiers`` are offered before all other tiers and are not limited by shares.
+
         ``stats`` includes ``segments_offered``, ``segments_kept``, ``tokens_trimmed`` (middle only)
         and ``kept_segments`` (surviving middle texts, in emitted order).
         """
+        count = self._count
         ref_map = dict(ref_map or {})
         segs = list(middle_segments)
         if (
@@ -134,10 +144,12 @@ class PreFlightContextFirewall:
             sorted_segments = [segs[i] for i in order]
         else:
             sorted_segments = sorted(segs, key=lambda x: (x[1], 0))
-        offered_tok = sum(count_tokens(s[0]) for s in sorted_segments)
+        if pinned_tiers:
+            sorted_segments.sort(key=lambda x: x[1] not in pinned_tiers)
+        offered_tok = sum(count(s[0]) for s in sorted_segments)
 
-        core_tok = count_tokens(core_text)
-        end_tok = count_tokens(end_text)
+        core_tok = count(core_text)
+        end_tok = count(end_text)
         reserved = core_tok + end_tok
         if reserved >= self.max_tokens:
             logger.warning(
@@ -155,26 +167,43 @@ class PreFlightContextFirewall:
             return combined, _ref_map_from_text(combined, ref_map), reserved, stats
 
         budget = self.max_tokens - reserved
+        middle_budget = budget
+        shares = {t: f for t, f in (tier_shares or {}).items() if not pinned_tiers or t not in pinned_tiers}
+        used: Dict[int, int] = {}
         procedural_count = 0
-        kept: List[str] = []
+        kept_idx: List[int] = []
+        deferred: List[int] = []
 
-        for seg_text, tier in sorted_segments:
-            seg_tok = count_tokens(seg_text)
+        def _take(i: int) -> bool:
+            nonlocal budget, procedural_count
+            seg_text, tier = sorted_segments[i]
+            seg_tok = count(seg_text)
+            if seg_tok > budget:
+                return False
             if tier == TIER_PROCEDURAL:
                 if procedural_count >= 3:
-                    continue
+                    return False
                 procedural_count += 1
-            if seg_tok > budget:
-                continue
-            kept.append(seg_text)
+            kept_idx.append(i)
             budget -= seg_tok
+            used[tier] = used.get(tier, 0) + seg_tok
+            return True
+
+        for i, (seg_text, tier) in enumerate(sorted_segments):
+            if tier in shares and used.get(tier, 0) + count(seg_text) > shares[tier] * middle_budget:
+                deferred.append(i)
+                continue
+            _take(i)
+        for i in deferred:
+            _take(i)
+        kept = [sorted_segments[i][0] for i in sorted(kept_idx)]
 
         # Separators and token merges at joins are not in the per-segment counts:
         # drop the lowest-priority kept segments until the assembled text fits.
         while True:
             middle_str = "\n".join(kept)
             final = core_text + "\n\n" + middle_str + "\n\n" + end_text
-            total = count_tokens(final)
+            total = count(final)
             if total <= self.max_tokens or not kept:
                 break
             kept.pop()
@@ -184,7 +213,7 @@ class PreFlightContextFirewall:
             for idx in _segment_refs(seg_text):
                 if idx in ref_map:
                     kept_refs[idx] = ref_map[idx]
-        kept_tok = count_tokens(middle_str) if middle_str else 0
+        kept_tok = count(middle_str) if middle_str else 0
         stats = {
             "segments_offered": len(sorted_segments),
             "segments_kept": len(kept),

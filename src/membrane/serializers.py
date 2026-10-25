@@ -8,9 +8,11 @@ collapse newlines so each memory stays one line. Episodic and procedural lines b
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from membrane import config as os_config
 from membrane.memory_protocol import infer_memory_kind
 
 logger = logging.getLogger(__name__)
@@ -18,10 +20,26 @@ logger = logging.getLogger(__name__)
 EPISODIC_SUMMARY_MAX_CHARS = 280
 
 
-def _dense_field(value: Any, max_chars: int) -> str:
+# Set when a memory's main text is cut; read by ``DenseSerializer.format_checked``.
+_text_truncated: ContextVar[bool] = ContextVar("membrane_text_truncated", default=False)
+
+
+def _dense_text(value: Any, default_max_chars: int) -> str:
+    """Main memory text: built-in limit unless ``MEMBRANE_MEMORY_TEXT_MAX_CHARS`` overrides it."""
+    override = os_config.get_memory_text_max_chars()
+    limit = default_max_chars if override is None else override
+    if not limit:
+        return _dense_field(value, None)
+    out = _dense_field(value, limit)
+    if out.endswith("...") and len(str(value).strip()) > limit:
+        _text_truncated.set(True)
+    return out
+
+
+def _dense_field(value: Any, max_chars: Optional[int]) -> str:
     """Normalize a value for dense key=value segments (pipe-safe, single line)."""
     s = str(value).replace("|", ",").replace("\n", " ").strip()
-    if len(s) > max_chars:
+    if max_chars is not None and len(s) > max_chars:
         s = s[: max_chars - 3] + "..."
     return s
 
@@ -48,7 +66,7 @@ class DenseSerializer:
         subject = getattr(fact, "subject", "") or ""
         predicate = getattr(fact, "predicate", "") or ""
         if content_only and not str(subject).strip() and not str(predicate).strip():
-            text = _dense_field(content_only, 200)
+            text = _dense_text(content_only, 200)
             return f"[fact] kind=note | text={text} | conf=1.00"
         obj = getattr(fact, "object", None)
         if obj is None:
@@ -56,9 +74,9 @@ class DenseSerializer:
         else:
             obj = obj or ""
         confidence = getattr(fact, "confidence", 0.0)
-        subj = _dense_field(subject, 200)
-        rel = _dense_field(predicate, 200)
-        o = _dense_field(obj, 200)
+        subj = _dense_text(subject, 200)
+        rel = _dense_text(predicate, 200)
+        o = _dense_text(obj, 200)
         try:
             conf_val = float(confidence)
         except (TypeError, ValueError):
@@ -81,7 +99,7 @@ class DenseSerializer:
             or getattr(episode, "content", "")
             or ""
         )
-        text = _dense_field(summary, EPISODIC_SUMMARY_MAX_CHARS)
+        text = _dense_text(summary, EPISODIC_SUMMARY_MAX_CHARS)
         return f"[Mem:{idx}] kind=episodic | date={date_str} | text={text}"
 
     @staticmethod
@@ -91,7 +109,7 @@ class DenseSerializer:
         text = _procedure_text(procedure)
         if not steps and text:
             # Plain procedural memories (e.g. KernelMemoryObject tier 1) carry their payload as text.
-            return f"[Mem:{idx}] kind=procedural | text={_dense_field(text, 500)}"
+            return f"[Mem:{idx}] kind=procedural | text={_dense_text(text, 500)}"
         name = getattr(procedure, "name", "") or "Unknown"
         name_safe = _dense_field(str(name).replace(":", "-"), 80)
         parts = []
@@ -113,6 +131,16 @@ class DenseSerializer:
                 except (TypeError, ValueError):
                     pass
         return f"[Mem:{idx}] kind=procedural | name={name_safe} | steps={steps_str} | outcome={outcome}"
+
+    @staticmethod
+    def format_checked(memory_object: Any, local_index: Optional[int] = None) -> "tuple[str, bool]":
+        """Like :meth:`format`, plus whether the memory's text was truncated."""
+        token = _text_truncated.set(False)
+        try:
+            line = DenseSerializer.format(memory_object, local_index=local_index)
+            return line, _text_truncated.get()
+        finally:
+            _text_truncated.reset(token)
 
     @staticmethod
     def format_full_prose(memory_object: Any) -> str:

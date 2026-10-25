@@ -536,6 +536,32 @@ def _lod_focus_merge(
     return focus_list + main_deduped
 
 
+_KIND_TIER = {
+    "procedural": TIER_PROCEDURAL,
+    "semantic": TIER_SEMANTIC,
+    "episodic": TIER_EPISODIC,
+}
+
+
+def _policy_disabled_features(policy_kw: Dict[str, Any]) -> List[str]:
+    """Features disabled by policies, minus any a policy re-enabled."""
+    enabled = set(policy_kw.get("policy_enable") or [])
+    return [f for f in (policy_kw.get("policy_disable") or []) if f not in enabled]
+
+
+def _policy_tier_settings(
+    policy_kw: Dict[str, Any],
+) -> Tuple[Optional[Dict[int, float]], Optional[Set[int]]]:
+    """``set_budget`` kind shares and ``pin_memory_kind`` kinds, as firewall tiers."""
+    shares = {
+        _KIND_TIER[k]: float(v)
+        for k, v in (policy_kw.get("policy_budget_override") or {}).items()
+        if k in _KIND_TIER
+    }
+    pinned = {_KIND_TIER[k] for k in (policy_kw.get("policy_pin_kinds") or []) if k in _KIND_TIER}
+    return shares or None, pinned or None
+
+
 @dataclass
 class ContextCompiler:
     """
@@ -589,6 +615,8 @@ class ContextCompiler:
         max_tok: int,
         use_split: bool,
         count_fn: Callable[[str], int],
+        tier_shares: Optional[Dict[int, float]] = None,
+        pinned_tiers: Optional[Set[int]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[int, str], int, Dict[str, Any]]:
         """Build end block, trim the middle under ``max_tok``, and format provider messages.
 
@@ -598,7 +626,7 @@ class ContextCompiler:
         history form a byte-stable prefix across turns.
         """
         caching = use_split and bool(self.model_id and has_prompt_caching(self.model_id))
-        firewall = PreFlightContextFirewall(max_tokens=max_tok)
+        firewall = PreFlightContextFirewall(max_tokens=max_tok, count_fn=count_fn)
         directives_block = layout.build_directives_block()
 
         if self.memory_placement == MEMORY_PLACEMENT_SYSTEM:
@@ -614,6 +642,8 @@ class ContextCompiler:
                 middle_segments=middle_segments,
                 ref_map=ref_map,
                 segment_weights=segment_weights,
+                tier_shares=tier_shares,
+                pinned_tiers=pinned_tiers,
             )
             fw_stats.pop("kept_segments", None)
             total_tokens = count_fn(final_text)
@@ -639,6 +669,8 @@ class ContextCompiler:
             middle_segments=middle_segments,
             ref_map=ref_map,
             segment_weights=segment_weights,
+            tier_shares=tier_shares,
+            pinned_tiers=pinned_tiers,
         )
         kept = list(fw_stats.pop("kept_segments", []))
         tail = ("\n".join(kept) + "\n\n" + end_text) if kept else end_text
@@ -669,6 +701,17 @@ class ContextCompiler:
                 dynamic_tail_tokens=tail_tokens,
             )
         return messages, cache_meta, ref_map_kept, prefix_tokens + tail_tokens, fw_stats
+
+    def _policy_max_tokens(self, policy_kw: Dict[str, Any]) -> int:
+        """Budget after policies: ``set_max_tokens`` / ``override.max_tokens`` replace it,
+        bounded by the model's context cap when the model is known."""
+        policy_max = policy_kw.get("policy_max_tokens")
+        if policy_max is None and policy_kw.get("max_tokens") != self.max_tokens:
+            policy_max = policy_kw.get("max_tokens")
+        if policy_max is None:
+            return self.effective_max_tokens()
+        cap = lookup_context_cap(self.model_id) if self.model_id else None
+        return min(int(policy_max), cap) if cap else int(policy_max)
 
     def effective_max_tokens(self) -> int:
         if self.model_id:
@@ -822,12 +865,9 @@ class ContextCompiler:
                     estimated_tokens=est_tok,
                     model_id=self.model_id,
                 )
-        policy_disable = policy_kw.get("policy_disable") or []
-        policy_max = policy_kw.get("policy_max_tokens")
-
-        max_tok = self.effective_max_tokens()
-        if policy_max is not None:
-            max_tok = min(max_tok, int(policy_max))
+        policy_disable = _policy_disabled_features(policy_kw)
+        tier_shares, pinned_tiers = _policy_tier_settings(policy_kw)
+        max_tok = self._policy_max_tokens(policy_kw)
 
         mems: List[Any] = list(memories)
         dedup_res = None
@@ -998,6 +1038,8 @@ class ContextCompiler:
                     max_tok=max_tok,
                     use_split=use_prompt_caching_split,
                     count_fn=_count_ctx,
+                    tier_shares=tier_shares,
+                    pinned_tiers=pinned_tiers,
                 )
             )
         if compressed_middle is not None and fw_stats.get("segments_kept"):
@@ -1040,6 +1082,7 @@ class ContextCompiler:
                 "segments_offered": int(fw_stats.get("segments_offered", segments_offered_pre)),
                 "segments_kept": int(fw_stats.get("segments_kept", 0)),
                 "memory_kinds_present": memory_kinds_present,
+                "memories_truncated": layout.last_truncated_count,
                 "stale_survivors": stale_survivors,
                 "stale_survivor_count": len(stale_survivors),
                 "compression_strategy_used": compression_strategy_used,
@@ -1257,12 +1300,9 @@ class ContextCompiler:
                     estimated_tokens=est_tok,
                     model_id=self.model_id,
                 )
-        policy_disable = policy_kw.get("policy_disable") or []
-        policy_max = policy_kw.get("policy_max_tokens")
-
-        max_tok = self.effective_max_tokens()
-        if policy_max is not None:
-            max_tok = min(max_tok, int(policy_max))
+        policy_disable = _policy_disabled_features(policy_kw)
+        tier_shares, pinned_tiers = _policy_tier_settings(policy_kw)
+        max_tok = self._policy_max_tokens(policy_kw)
 
         mems: List[Any] = list(memories)
         dedup_res = None
@@ -1463,6 +1503,8 @@ class ContextCompiler:
                     max_tok=max_tok,
                     use_split=use_prompt_caching_split,
                     count_fn=_count_ctx,
+                    tier_shares=tier_shares,
+                    pinned_tiers=pinned_tiers,
                 )
             )
         if compressed_middle is not None and fw_stats.get("segments_kept"):
@@ -1505,6 +1547,7 @@ class ContextCompiler:
                 "segments_offered": int(fw_stats.get("segments_offered", segments_offered_pre)),
                 "segments_kept": int(fw_stats.get("segments_kept", 0)),
                 "memory_kinds_present": memory_kinds_present,
+                "memories_truncated": layout.last_truncated_count,
                 "stale_survivors": stale_survivors,
                 "stale_survivor_count": len(stale_survivors),
                 "compression_strategy_used": compression_strategy_used,
