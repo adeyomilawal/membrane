@@ -27,8 +27,8 @@ pip install "membrane-aol[all]"     # common optional extras
 The package installs as `membrane-aol` and imports as `membrane`. From source:
 
 ```bash
-git clone https://github.com/adeyomilawal/membrane-aol.git
-cd membrane-aol
+git clone https://github.com/adeyomilawal/membrane.git
+cd membrane
 pip install -e .
 ```
 
@@ -207,16 +207,28 @@ When a shift is detected (cosine distance above `LOD_ATTENTION_SHIFT_COSINE_THRE
 
 ## Benchmarks
 
-Benchmark scripts are included in `benchmarks/`:
+**Prompt-cache savings** (`benchmarks/cache_savings.py`): a 20-turn chat with a 2,000-token system prompt and 5 new memories retrieved every turn. The provider caches the longest prefix shared with the previous request (minimum 1,024 tokens).
+
+| Setup | Input tokens | Served from cache | Input cost, Anthropic pricing (cache reads 0.1x) | Input cost, OpenAI pricing (cache reads 0.5x) |
+| --- | ---: | ---: | ---: | ---: |
+| Without Membrane: memories in the system prompt, full history | 84,380 | 45% | 100 | 100 |
+| **Membrane, `memory_placement="end"` (default)** | 87,460 | **86%** | **40** | **77** |
+| Membrane, `memory_placement="system"` | 51,091 | 78% | 31 | 48 |
+
+With the same full history, the default placement cuts input cost by 23–60%, because memories no longer sit in front of the history and break the cache every turn. `"system"` is cheaper still only because it sends just the last turn of history; use it when the model doesn't need the conversation. Numbers are deterministic for this simulation; your savings depend on prompt sizes and the provider's pricing.
+
+```bash
+uv run python -m benchmarks.cache_savings
+```
+
+Other scripts in `benchmarks/`:
 
 - **`token_savings_bench.py`** — measures token reduction from pre-flight compression and priority trimming across prompt sizes.
 - **`trimming_bench.py`** — validates that trimming preserves high-priority content and maintains the U-shaped positional layout.
 
-Run benchmarks:
-
 ```bash
-uv run python benchmarks/token_savings_bench.py
-uv run python benchmarks/trimming_bench.py
+uv run python -m benchmarks.token_savings_bench
+uv run python -m benchmarks.trimming_bench
 ```
 
 ---
@@ -347,6 +359,12 @@ pytest
 - [U-shaped layout](docs/u-shaped-layout.md) — rationale with academic citation
 - [Prompt caching](docs/prompt-caching.md) — per-provider caching guide
 - [Interrupt protocol](docs/interrupt-protocol.md) — mid-generation retrieval
+
+---
+
+## Contributing
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Every pull request needs the [Contributor License Agreement](CLA.md). Report security issues privately as described in [SECURITY.md](SECURITY.md).
 
 ---
 

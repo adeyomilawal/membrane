@@ -57,4 +57,4 @@ First open-source release, published on PyPI as **`membrane-aol`** (imports as `
 - Add GitHub Actions workflow: editable install, **Ruff** on `src`/`tests`, **pytest** on push/PR for `membrane/**`.
 - Patch release after test and packaging verification.
 
-[0.1.1]: https://github.com/adeyomilawal/membrane-aol/compare/v0.1.0...v0.1.1
+[0.1.1]: https://github.com/adeyomilawal/membrane/compare/v0.1.0...v0.1.1

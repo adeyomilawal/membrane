@@ -57,9 +57,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/adeyomilawal/membrane-aol"
-Source = "https://github.com/adeyomilawal/membrane-aol"
-Issues = "https://github.com/adeyomilawal/membrane-aol/issues"
+Homepage = "https://github.com/adeyomilawal/membrane"
+Source = "https://github.com/adeyomilawal/membrane"
+Issues = "https://github.com/adeyomilawal/membrane/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/membrane"]
