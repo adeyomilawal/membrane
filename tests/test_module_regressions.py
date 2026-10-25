@@ -420,23 +420,21 @@ def test_dedup_not_transitive():
     assert "c" in res.kept
 
 
-def test_dedup_warns_on_hash_fallback_and_caches_model(monkeypatch, caplog):
+def test_dedup_warns_once_when_fastembed_missing(monkeypatch, caplog):
+    import sys
+
     from membrane.dedup import deduplicator as mod
 
     monkeypatch.setattr(mod, "_MODEL", None)
     monkeypatch.setattr(mod, "_MODEL_FAILED", False)
-    loads = []
-
-    def fake_get_model():
-        loads.append(1)
-        return None
-
-    # model lookup failing must warn and fall back to hash vectors
-    monkeypatch.setattr(mod, "_get_model", fake_get_model)
+    monkeypatch.setitem(sys.modules, "fastembed", None)  # import raises ImportError
     with caplog.at_level(logging.WARNING, logger=mod.logger.name):
         out = mod._default_embed_batch(["x"])
+        mod._default_embed_batch(["y"])
     assert len(out[0]) == 32
-    assert any("hash" in r.getMessage() for r in caplog.records)
+    warnings = [r for r in caplog.records if "hash embeddings" in r.getMessage()]
+    assert len(warnings) == 1
+    assert warnings[0].exc_info is None
 
 
 def test_dedup_model_loaded_once(monkeypatch):

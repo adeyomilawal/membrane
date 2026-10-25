@@ -45,10 +45,17 @@ def _get_model() -> Any:
             from fastembed import TextEmbedding  # type: ignore
 
             _MODEL = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        except ImportError:
+            # Logged once per process: dedup still works, just not semantically.
+            _MODEL_FAILED = True
+            logger.warning(
+                "fastembed not installed; dedup uses hash embeddings and only removes "
+                "exact duplicates. Install membrane[lod] for semantic dedup."
+            )
         except Exception:
             _MODEL_FAILED = True
             logger.warning(
-                "fastembed unavailable; dedup falls back to hash embeddings", exc_info=True
+                "fastembed failed to load; dedup falls back to hash embeddings", exc_info=True
             )
     return _MODEL
 
@@ -60,8 +67,6 @@ def _default_embed_batch(texts: list[str], dim: int = 32) -> list[list[float]]:
             return [list(e) for e in model.embed(texts)]
         except Exception:
             logger.warning("fastembed embedding failed; using hash embeddings", exc_info=True)
-    else:
-        logger.warning("using hash embeddings for dedup (similarity is not semantic)")
     return [_hash_embed(t, dim) for t in texts]
 
 
