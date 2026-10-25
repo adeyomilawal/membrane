@@ -50,7 +50,7 @@ def _get_model() -> Any:
             _MODEL_FAILED = True
             logger.warning(
                 "fastembed not installed; dedup uses hash embeddings and only removes "
-                "exact duplicates. Install membrane[lod] for semantic dedup."
+                "exact duplicates. Install membrane-aol[lod] for semantic dedup."
             )
         except Exception:
             _MODEL_FAILED = True

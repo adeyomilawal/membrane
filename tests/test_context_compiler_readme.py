@@ -31,10 +31,11 @@ def test_compile_readme_quickstart():
 
     assert isinstance(result, CompileResult)
     assert result.messages
+    # Default end placement: system holds the core; the last message holds memories + query.
     assert result.messages[0]["role"] == "system"
-    content = result.messages[0]["content"]
-    assert "helpful assistant" in content
-    assert "Show a producer-consumer example." in content
+    assert "helpful assistant" in result.messages[0]["content"]
+    assert result.messages[-1]["role"] == "user"
+    assert "Show a producer-consumer example." in result.messages[-1]["content"]
     assert result.ref_map.get(1) == "1"
     assert result.ref_map.get(2) == "2"
     assert "token_count" in result.metadata

@@ -424,6 +424,36 @@ def _normalize_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _trim_history_chunked(
+    history: list[dict[str, Any]],
+    limit: int,
+    count_fn: Callable[[str], int],
+) -> tuple[list[dict[str, Any]], int]:
+    """Drop the oldest messages so the rest fits ``limit``; return (kept, dropped count).
+
+    The cut lands on a grid of half the limit, measured in tokens from the start of the
+    conversation. History is append-only, so the cut stays put while new turns arrive and
+    only jumps when another half-limit of history has built up: the cached prefix breaks
+    once per jump instead of every turn. The kept history always starts on a user message
+    so tool results are never separated from their call.
+    """
+    sizes = [count_fn(_message_text(m)) for m in history]
+    total = sum(sizes)
+    if total <= limit or not history:
+        return history, 0
+    if limit <= 0:
+        return [], len(history)
+    step = max(1, limit // 2)
+    boundary = -(-(total - limit) // step) * step  # round up to the grid
+    start, seen = 0, 0
+    while start < len(history) and seen < boundary:
+        seen += sizes[start]
+        start += 1
+    while start < len(history) and history[start].get("role") != "user":
+        start += 1
+    return history[start:], start
+
+
 def _message_text(message: dict[str, Any]) -> str:
     """Text used for token counting of a history message."""
     content = message.get("content")
@@ -585,14 +615,18 @@ class ContextCompiler:
     ``max_tokens`` is the hard context budget (defaults from provider registry when
     ``model_id`` is set via ``resolve_max_tokens_from_model``).
 
-    ``memory_placement`` controls where retrieved memories go. ``"system"`` (default)
-    emits one system message: core, memories, last turn, user message. Memories change
-    every turn, so the provider prompt cache cannot hit past the core. ``"end"`` emits
+    ``memory_placement`` controls where retrieved memories go. ``"end"`` (default) emits
     the system message (core only) and ``conversation_messages`` as given, then one user
     message with memories, the current user message and dynamic directives. System +
     history then form a byte-stable prefix that prompt caching can reuse across turns.
-    History is sent in full and never trimmed; if it overruns ``max_tokens`` the result
-    carries ``metadata["budget_exceeded"] = True`` and the caller must shorten it.
+    ``"system"`` emits one system message: core, memories, last turn, user message. It
+    sends less (only the last turn of history) but memories change every turn, so the
+    provider cache cannot hit past the core; it suits local models and one-off calls.
+
+    With ``trim_history`` (default) end placement drops the oldest history in large chunks
+    when it would crowd out the budget, leaving a quarter of the remaining room for
+    memories; ``metadata["history_messages_dropped"]`` reports how many. Turn it off to
+    manage history yourself; an overrun then sets ``metadata["budget_exceeded"] = True``.
     """
 
     max_tokens: int
@@ -601,7 +635,8 @@ class ContextCompiler:
     include_interrupt_instruction: bool = True
     preflight_analyst_model: str | None = None
     metrics_callback: MetricsCallback | None = None
-    memory_placement: str = MEMORY_PLACEMENT_SYSTEM
+    memory_placement: str = MEMORY_PLACEMENT_END
+    trim_history: bool = True
 
     def __post_init__(self) -> None:
         if self.memory_placement not in MEMORY_PLACEMENTS:
@@ -669,9 +704,20 @@ class ContextCompiler:
             last_turn_content=None if history else last_assistant_turn,
             user_message=user_message,
         )
+        history_dropped = 0
+        if self.trim_history and history:
+            # Leave room for memories: history may take all but a quarter of what is left.
+            available = max_tok - count_fn(core_text) - count_fn(end_text + directives_block)
+            offered = sum(count_fn(seg) for seg, _ in middle_segments)
+            history_limit = available - min(offered, max(0, available) // 4)
+            history, history_dropped = _trim_history_chunked(history, history_limit, count_fn)
         history_text = "\n\n".join(_message_text(m) for m in history)
-        # History is part of the cached prefix: it is reserved, never trimmed.
-        reserved_end = history_text + "\n\n" + end_text if history_text else end_text
+        # History is part of the cached prefix: reserved here, only trimmed above in chunks.
+        # Directives ride in the final user message, so they are reserved too.
+        end_with_directives = end_text + directives_block
+        reserved_end = (
+            history_text + "\n\n" + end_with_directives if history_text else end_with_directives
+        )
         _, ref_map_kept, _, fw_stats = firewall.run(
             core_text=core_text,
             end_text=reserved_end,
@@ -693,12 +739,12 @@ class ContextCompiler:
         cache_meta: dict[str, Any] = {
             "memory_placement": MEMORY_PLACEMENT_END,
             "stable_prefix_messages": len(system) + len(history),
+            "history_messages_dropped": history_dropped,
         }
         if prefix_tokens + tail_tokens > max_tok:
-            # History is never trimmed (that would break the cache); report the overrun.
             logger.warning(
                 "memory_placement=end: system+history+end (%s tokens) exceeds max_tokens (%s); "
-                "trim conversation_messages before compiling",
+                "shorten conversation_messages or enable trim_history",
                 prefix_tokens + tail_tokens,
                 max_tok,
             )
@@ -1807,7 +1853,7 @@ async def compile_prompt_async(
     redis_url_for_ref_map: str | None = None,
     use_prompt_caching_split: bool = True,
     metrics_callback: MetricsCallback | None = None,
-    memory_placement: str = MEMORY_PLACEMENT_SYSTEM,
+    memory_placement: str = MEMORY_PLACEMENT_END,
     profile: Any = None,
     reranker: Any = None,
     deduplicator: Any = None,

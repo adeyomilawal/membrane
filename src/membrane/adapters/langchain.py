@@ -39,7 +39,7 @@ def langchain_doc_to_memory(doc: Any) -> MemoryItem:
     try:
         from langchain_core.documents import Document  # type: ignore
     except ImportError as e:
-        raise ImportError("membrane[langchain] requires langchain-core") from e
+        raise ImportError("membrane-aol[langchain] requires langchain-core") from e
     if not isinstance(doc, Document):
         raise TypeError("expected langchain_core.documents.Document")
     return MemoryItem(

@@ -66,9 +66,9 @@ def _stable_prefix_tokens(t1, t2) -> int:
     return count_tokens(_common_prefix(_serialize(t1.messages), _serialize(t2.messages)))
 
 
-def test_default_placement_breaks_cache_at_first_memory():
+def test_system_placement_breaks_cache_at_first_memory():
     """Confirms the issue: the shared prefix ends where turn-specific memories begin."""
-    t1, t2 = _two_turns()
+    t1, t2 = _two_turns(memory_placement="system")
     prefix = _common_prefix(_serialize(t1.messages), _serialize(t2.messages))
     assert len(t1.messages) == 1 and t1.messages[0]["role"] == "system"
     # Prefix is the core and nothing past it; history is never part of a shared prefix.
@@ -182,7 +182,7 @@ def test_stable_prefix_benchmark(capsys):
     """Reports cache-reusable prefix tokens between two consecutive turns."""
     lines = []
     for n in (1, 10, 30):
-        before = _stable_prefix_tokens(*_long_turns(n))
+        before = _stable_prefix_tokens(*_long_turns(n, memory_placement="system"))
         t1, t2 = _long_turns(n, memory_placement="end")
         after = _stable_prefix_tokens(t1, t2)
         total = count_tokens(_serialize(t2.messages))
@@ -218,10 +218,13 @@ def test_end_placement_preserves_tool_call_history():
 
 def test_end_placement_flags_history_over_budget():
     history = [{"role": "user", "content": "word " * 3000}]
-    cc = ContextCompiler(max_tokens=1500, model_id=MODEL, core_content=CORE, memory_placement="end")
+    cc = ContextCompiler(
+        max_tokens=1500, model_id=MODEL, core_content=CORE, memory_placement="end",
+        trim_history=False,
+    )
     r = cc.compile(memories=MEMS_TURN1, user_message=U1, conversation_messages=history)
     assert r.metadata["budget_exceeded"] is True
-    assert r.messages[1] == history[0]  # never trimmed
+    assert r.messages[1] == history[0]  # trimming is off
     assert r.ref_map == {}
     ok = ContextCompiler(max_tokens=8192, model_id=MODEL, core_content=CORE, memory_placement="end")
     assert "budget_exceeded" not in ok.compile(

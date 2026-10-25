@@ -19,13 +19,17 @@ Membrane treats the LLM context window like an operating system treats RAM: **fi
 
 ## Install
 
-Membrane is not on PyPI yet. Install from source:
+```bash
+pip install membrane-aol            # core
+pip install "membrane-aol[all]"     # common optional extras
+```
+
+The package installs as `membrane-aol` and imports as `membrane`. From source:
 
 ```bash
-git clone https://github.com/adeyomilawal/membrane.git
-cd membrane
-pip install -e .            # core
-pip install -e ".[all]"     # common optional extras
+git clone https://github.com/adeyomilawal/membrane-aol.git
+cd membrane-aol
+pip install -e .
 ```
 
 For development:
@@ -150,7 +154,9 @@ Different providers implement prompt caching differently:
 
 `glaciate()` splits the system text at line boundaries so the cacheable prefix is stable across requests. `provider_registry.has_prompt_caching(model_id)` checks whether a model supports caching.
 
-By default (`memory_placement="system"`) retrieved memories sit inside the system message, so the cache cannot hit past the core: memories change every turn. Pass `ContextCompiler(..., memory_placement="end")` to emit the system message (core only), then `conversation_messages` as given (tool calls and content-part lists kept), then one user message with the kept memories, the current user message and dynamic directives. The system message plus history then form a byte-stable prefix across turns, and the firewall still trims memories and prunes `ref_map` (history is reserved, never trimmed; an overrun sets `metadata["budget_exceeded"]`). End mode sends the full history, which the default mode does not, so requests are larger but mostly cache-served. `tests/test_prompt_cache_stability.py` prints the reusable prefix for both modes.
+**Memory placement.** By default (`memory_placement="end"`) Membrane emits the system message (core only), then `conversation_messages` as given (tool calls and content-part lists kept), then one user message with the kept memories, the current user message and dynamic directives. The system message plus history form a byte-stable prefix across turns, so the provider cache serves most of each request, and memories sit right next to the question. When history would crowd out the budget, the oldest turns are dropped in large chunks (`metadata["history_messages_dropped"]`), so the cache breaks only occasionally; pass `trim_history=False` to manage history yourself (an overrun then sets `metadata["budget_exceeded"]`).
+
+`memory_placement="system"` puts core, memories, the last turn and the user message in one system message. It sends less, but memories change every turn, so the cache cannot hit past the core. Use it for local models without caching and for one-off calls. `tests/test_prompt_cache_stability.py` prints the reusable prefix for both modes.
 
 See [Prompt caching](docs/prompt-caching.md) for per-provider details.
 

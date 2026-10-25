@@ -2,7 +2,7 @@
 
 ## MCP (stdio)
 
-Install: `pip install "membrane[mcp]"`.
+Install: `pip install "membrane-aol[mcp]"`.
 
 ```bash
 python -m membrane.adapters.mcp_server
@@ -12,7 +12,7 @@ Wire a custom `memory_provider` in Python to resolve `memory_uris` to `MemoryIte
 
 ## LangChain
 
-Install: `pip install "membrane[langchain]"`.
+Install: `pip install "membrane-aol[langchain]"`.
 
 Use `MembranePromptTemplate` **instead of** `ConversationBufferMemory` for the same chain. See
 `membrane.adapters.langchain.disable_langchain_memory` and `MemoryCollisionError`.

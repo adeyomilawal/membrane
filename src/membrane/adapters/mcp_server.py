@@ -1,7 +1,7 @@
 """
 MCP (Model Context Protocol) server exposing Membrane as tools + resources.
 
-Install: ``pip install membrane[mcp]`` (requires ``mcp>=1.0``).
+Install: ``pip install membrane-aol[mcp]`` (requires ``mcp>=1.0``).
 
 Run (stdio, for Cursor / Claude Desktop):
 
@@ -47,7 +47,7 @@ def _require_mcp():
         from mcp.server.models import InitializationOptions  # noqa: F401
     except ImportError as e:
         raise ImportError(
-            "Membrane MCP server requires the 'mcp' package. Install: pip install membrane[mcp]"
+            "Membrane MCP server requires the 'mcp' package. Install: pip install membrane-aol[mcp]"
         ) from e
 
 

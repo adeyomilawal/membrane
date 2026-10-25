@@ -86,5 +86,5 @@ def test_compile_accepts_kernel_dict_rows():
     )
     assert isinstance(result, CompileResult)
     assert result.messages
-    full = result.messages[0].get("content", "")
+    full = "\n".join(str(m.get("content", "")) for m in result.messages)
     assert "User likes tests." in full or "Legacy row." in full

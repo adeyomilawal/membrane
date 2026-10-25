@@ -28,11 +28,22 @@ def _text(result) -> str:
 @pytest.mark.parametrize("max_tokens", [300, 400, 700])
 @pytest.mark.parametrize("directives", [None, ["be terse " * 30]])
 def test_system_mode_stays_within_budget(max_tokens, directives):
-    r = _cc(max_tokens).compile(
+    r = _cc(max_tokens, memory_placement="system").compile(
         memories=_facts(60), user_message="hello there", dynamic_directives=directives
     )
     assert r.metadata["token_count"] == count_tokens(r.messages[0]["content"])
     assert r.metadata["token_count"] <= max_tokens
+
+
+@pytest.mark.parametrize("max_tokens", [300, 400, 700])
+@pytest.mark.parametrize("directives", [None, ["be terse " * 30]])
+def test_end_mode_stays_within_budget(max_tokens, directives):
+    r = _cc(max_tokens).compile(
+        memories=_facts(60), user_message="hello there", dynamic_directives=directives
+    )
+    assert r.metadata["token_count"] <= max_tokens
+    if directives:
+        assert "be terse" in r.messages[-1]["content"]
 
 
 def test_directives_survive_trimming():
@@ -270,7 +281,9 @@ async def test_ref_map_key_is_scoped_to_user():
 
 def test_cache_prefix_is_exactly_the_core():
     core = "Stable instructions. " * 400
-    r = ContextCompiler(max_tokens=20000, model_id="openai/gpt-4o", core_content=core).compile(
+    r = ContextCompiler(
+        max_tokens=20000, model_id="openai/gpt-4o", core_content=core, memory_placement="system"
+    ).compile(
         memories=_facts(5), user_message="hi"
     )
     md = r.metadata

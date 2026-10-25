@@ -11,6 +11,7 @@ from membrane import config as os_config
 logger = logging.getLogger(__name__)
 
 _embedding_model: Any = None
+_numpy_warned = False
 
 
 def _get_embedding_model():
@@ -30,10 +31,16 @@ def _get_embedding_model():
 def embed_texts(texts: Sequence[str]):
     """Embed strings; return (n, dim) numpy array or None on failure."""
 
+    global _numpy_warned
     try:
         import numpy as np
     except ImportError:
-        logger.warning("numpy not installed; LOD embeddings unavailable")
+        if not _numpy_warned:
+            _numpy_warned = True
+            logger.warning(
+                "numpy not installed; attention-shift detection is off. "
+                "Install membrane-aol[lod] to enable it."
+            )
         return None
 
     model = _get_embedding_model()

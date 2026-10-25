@@ -22,7 +22,7 @@ def haystack_document_to_memory(doc: Any) -> MemoryItem:
     try:
         from haystack import Document  # type: ignore
     except ImportError as e:
-        raise ImportError("membrane[haystack] requires haystack-ai") from e
+        raise ImportError("membrane-aol[haystack] requires haystack-ai") from e
     if not isinstance(doc, Document):
         raise TypeError("expected haystack.Document")
     meta = doc.meta or {}

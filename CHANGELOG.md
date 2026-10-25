@@ -2,7 +2,12 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.0] — Unreleased
+
+First open-source release, published on PyPI as **`membrane-aol`** (imports as `membrane`).
+
+- **Default `memory_placement` is now `"end"`**, so system message and history stay cacheable across turns. Pass `memory_placement="system"` for the previous layout (better for local models and one-off calls).
+- End placement trims the oldest history in large, stable chunks when it would crowd out the budget, leaving room for memories (`trim_history=True`, `metadata["history_messages_dropped"]`). Directives are now reserved inside the budget in end placement too.
 
 - Relicense under **Apache-2.0** (previously PolyForm Noncommercial).
 - Remove license activation, tier gates, portal analytics, and the CLI `login`, `logout`, `whoami`, `status`, `refresh`, and `token` commands. Every feature is available without activation.
@@ -52,4 +57,4 @@ All notable changes to this project are documented here. The format is based on 
 - Add GitHub Actions workflow: editable install, **Ruff** on `src`/`tests`, **pytest** on push/PR for `membrane/**`.
 - Patch release after test and packaging verification.
 
-[0.1.1]: https://github.com/adeyomilawal/membrane/compare/v0.1.0...v0.1.1
+[0.1.1]: https://github.com/adeyomilawal/membrane-aol/compare/v0.1.0...v0.1.1

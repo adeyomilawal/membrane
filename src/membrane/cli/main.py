@@ -10,7 +10,7 @@ def _version_string() -> str:
     try:
         from importlib.metadata import version
 
-        return version("membrane")
+        return version("membrane-aol")
     except Exception:
         return "0.0.0"
 

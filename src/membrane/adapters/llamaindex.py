@@ -60,7 +60,7 @@ class MembraneNodePostprocessor(BaseNodePostprocessor):  # type: ignore[misc,val
 
     def __init__(self, compiler: Any, *, max_tokens: int = 8192, profile: Any = None) -> None:
         if not _HAS_LLAMA_INDEX:
-            raise ImportError("membrane[llamaindex] requires llama-index-core")
+            raise ImportError("membrane-aol[llamaindex] requires llama-index-core")
         super().__init__()
         self._compiler = compiler
         self._max_tokens = max_tokens

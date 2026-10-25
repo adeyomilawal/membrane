@@ -2115,8 +2115,8 @@ wheels = [
 ]
 
 [[package]]
-name = "membrane"
-version = "0.1.1"
+name = "membrane-aol"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "tiktoken" },
