@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import copy
+import dataclasses
+import logging
 from typing import Any, Dict, List, Optional, Sequence
 
 from membrane.classifier.classifier import MemoryClassifier, MemoryKind
-from membrane.firewall import count_tokens
-from membrane.memory_protocol import MemoryItem
+from membrane.firewall import TIER_EPISODIC, TIER_PROCEDURAL, TIER_SEMANTIC, count_tokens
+from membrane.memory_protocol import KernelMemoryObject, MemoryItem
+
+logger = logging.getLogger(__name__)
+
+_MEMORY_TYPE_TIER = {
+    "procedural": TIER_PROCEDURAL,
+    "semantic": TIER_SEMANTIC,
+    "episodic": TIER_EPISODIC,
+}
 
 
 def resolve_profile(
@@ -97,14 +108,16 @@ def apply_classifier(
                 memory_type=mt,  # type: ignore[arg-type]
                 priority=m.priority,
             )
-        else:
-            if hasattr(m, "memory_type"):
-                try:
-                    m.memory_type = mt  # type: ignore[attr-defined]
-                except Exception:
-                    setattr(m, "memory_type", mt)
-            else:
-                setattr(m, "_membrane_inferred_type", mt)
+        elif isinstance(m, KernelMemoryObject):
+            # Kind follows semantic_tier, so retier a copy.
+            m = dataclasses.replace(m, semantic_tier=_MEMORY_TYPE_TIER[mt])
+        elif hasattr(m, "memory_type"):
+            # Never mutate the caller's object: it may be shared across compiles.
+            try:
+                m = copy.copy(m)
+                m.memory_type = mt  # type: ignore[attr-defined]
+            except Exception as e:
+                logger.debug("classifier: could not retype %r: %s", type(m).__name__, e)
         out.append(m)
     return out
 

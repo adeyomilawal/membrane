@@ -48,6 +48,7 @@ TIER_SEMANTIC = 2
 TIER_EPISODIC = 3
 
 _MEM_REF_PATTERN = re.compile(r"\[Mem:(\d+)\]")
+_LEADING_MEM_REF = re.compile(r"^\s*\[Mem:(\d+)\]")
 
 
 def _extract_mem_refs(segment: str) -> List[Tuple[int, int]]:
@@ -60,6 +61,17 @@ def _extract_mem_refs(segment: str) -> List[Tuple[int, int]]:
         except ValueError:
             continue
     return out
+
+
+def _segment_refs(segment: str) -> List[int]:
+    """Refs a segment owns: its leading ``[Mem:N]``, else every ref in it (compressed text).
+
+    A memory that merely mentions ``[Mem:M]`` in its content does not own ``M``.
+    """
+    lead = _LEADING_MEM_REF.match(segment)
+    if lead:
+        return [int(lead.group(1))]
+    return [idx for idx, _ in _extract_mem_refs(segment)]
 
 
 class PreFlightContextFirewall:
@@ -145,7 +157,6 @@ class PreFlightContextFirewall:
         budget = self.max_tokens - reserved
         procedural_count = 0
         kept: List[str] = []
-        kept_refs: Dict[int, str] = {}
 
         for seg_text, tier in sorted_segments:
             seg_tok = count_tokens(seg_text)
@@ -157,13 +168,22 @@ class PreFlightContextFirewall:
                 continue
             kept.append(seg_text)
             budget -= seg_tok
-            for idx, _ in _extract_mem_refs(seg_text):
+
+        # Separators and token merges at joins are not in the per-segment counts:
+        # drop the lowest-priority kept segments until the assembled text fits.
+        while True:
+            middle_str = "\n".join(kept)
+            final = core_text + "\n\n" + middle_str + "\n\n" + end_text
+            total = count_tokens(final)
+            if total <= self.max_tokens or not kept:
+                break
+            kept.pop()
+
+        kept_refs: Dict[int, str] = {}
+        for seg_text in kept:
+            for idx in _segment_refs(seg_text):
                 if idx in ref_map:
                     kept_refs[idx] = ref_map[idx]
-
-        middle_str = "\n".join(kept)
-        final = core_text + "\n\n" + middle_str + "\n\n" + end_text
-        total = count_tokens(final)
         kept_tok = count_tokens(middle_str) if middle_str else 0
         stats = {
             "segments_offered": len(sorted_segments),

@@ -87,9 +87,13 @@ class DenseSerializer:
     @staticmethod
     def _format_procedure(procedure: Any, local_index: Optional[int]) -> str:
         idx = local_index if local_index is not None else 0
+        steps = getattr(procedure, "steps", []) or []
+        text = _procedure_text(procedure)
+        if not steps and text:
+            # Plain procedural memories (e.g. KernelMemoryObject tier 1) carry their payload as text.
+            return f"[Mem:{idx}] kind=procedural | text={_dense_field(text, 500)}"
         name = getattr(procedure, "name", "") or "Unknown"
         name_safe = _dense_field(str(name).replace(":", "-"), 80)
-        steps = getattr(procedure, "steps", []) or []
         parts = []
         for s in steps:
             step_num = getattr(s, "step_number", len(parts) + 1)
@@ -169,6 +173,9 @@ class DenseSerializer:
 
     @staticmethod
     def _format_procedure_full_prose(procedure: Any) -> str:
+        text = _procedure_text(procedure)
+        if not (getattr(procedure, "steps", None) or []) and text:
+            return text
         lines = []
         name = getattr(procedure, "name", "") or "Unnamed procedure"
         desc = getattr(procedure, "description", "") or ""
@@ -201,3 +208,12 @@ class DenseSerializer:
             if global_id is not None:
                 ref_map[local_idx] = str(global_id)
         return lines, ref_map
+
+
+def _procedure_text(procedure: Any) -> str:
+    """Free-text body of a procedural memory without structured steps."""
+    for attr in ("payload", "content"):
+        val = getattr(procedure, attr, None)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""

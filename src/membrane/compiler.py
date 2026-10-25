@@ -17,7 +17,6 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Set
 
 import membrane.config as os_config
 from membrane.async_preflight import get_preflight_cache, set_preflight_cache
-from membrane.cache_format import build_system_messages
 from membrane.compile_wiring import (
     apply_classifier,
     estimate_memory_tokens,
@@ -30,15 +29,15 @@ from membrane.firewall import (
     TIER_PROCEDURAL,
     TIER_SEMANTIC,
     PreFlightContextFirewall,
+    _ref_map_from_text,
     count_tokens,
 )
-from membrane.glaciator import glaciate
 from membrane.layout import ContextLayoutEngine
 from membrane.observability.profiler import LatencyProfiler
 from membrane.lod import compute_attention_shift
 from membrane.memory_protocol import infer_memory_kind, normalize_compile_memories
 from membrane.metrics import CompileMetrics, MetricsCallback, build_compile_metrics
-from membrane.provider_registry import get_context_cap_for_model, has_prompt_caching
+from membrane.provider_registry import has_prompt_caching, lookup_context_cap
 from membrane.ref_map import set_ref_map_for_conversation
 from membrane.runtime.signals import Signal, SignalKind
 
@@ -608,18 +607,21 @@ class ContextCompiler:
                 or _last_turn_from_messages(conversation_messages),
                 user_message=user_message,
             )
-            final_text, ref_map_kept, total_tokens, fw_stats = firewall.run(
+            # Directives go last but are reserved with the end block so they fit the budget.
+            final_text, ref_map_kept, _, fw_stats = firewall.run(
                 core_text=core_text,
-                end_text=end_text,
+                end_text=end_text + directives_block,
                 middle_segments=middle_segments,
                 ref_map=ref_map,
                 segment_weights=segment_weights,
             )
             fw_stats.pop("kept_segments", None)
-            if directives_block:
-                final_text = final_text + directives_block
-                total_tokens += count_fn(directives_block)
-            messages, cache_meta = _build_output_messages(self.model_id, final_text, caching)
+            total_tokens = count_fn(final_text)
+            messages, cache_meta = _build_output_messages(
+                self.model_id, final_text, caching, prefix_text=core_text
+            )
+            if total_tokens > max_tok:
+                cache_meta["budget_exceeded"] = True
             return messages, cache_meta, ref_map_kept, total_tokens, fw_stats
 
         history = _normalize_history(conversation_messages)
@@ -641,13 +643,15 @@ class ContextCompiler:
         kept = list(fw_stats.pop("kept_segments", []))
         tail = ("\n".join(kept) + "\n\n" + end_text) if kept else end_text
         tail += directives_block
-        messages = [{"role": "system", "content": core_text}, *history]
+        # Some providers reject an empty system message.
+        system = [{"role": "system", "content": core_text}] if core_text.strip() else []
+        messages = [*system, *history]
         messages.append({"role": "user", "content": tail})
         prefix_tokens = count_fn(core_text) + sum(count_fn(_message_text(m)) for m in history)
         tail_tokens = count_fn(tail)
         cache_meta: Dict[str, Any] = {
             "memory_placement": MEMORY_PLACEMENT_END,
-            "stable_prefix_messages": 1 + len(history),
+            "stable_prefix_messages": len(system) + len(history),
         }
         if prefix_tokens + tail_tokens > max_tok:
             # History is never trimmed (that would break the cache); report the overrun.
@@ -658,7 +662,7 @@ class ContextCompiler:
                 max_tok,
             )
             cache_meta["budget_exceeded"] = True
-        if caching:
+        if caching and prefix_tokens >= MIN_CACHEABLE_PREFIX_TOKENS:
             cache_meta.update(
                 prompt_cache_used=True,
                 cacheable_prefix_tokens=prefix_tokens,
@@ -668,7 +672,8 @@ class ContextCompiler:
 
     def effective_max_tokens(self) -> int:
         if self.model_id:
-            cap = get_context_cap_for_model(self.model_id)
+            # Unknown models never shrink the caller's budget.
+            cap = lookup_context_cap(self.model_id)
             if cap and cap > 0:
                 return min(self.max_tokens, cap)
         return self.max_tokens
@@ -761,7 +766,7 @@ class ContextCompiler:
         Stages follow ``membrane/future.md`` (Compile Pipeline Order): policies →
         classify → freshness → dedup → layout core → reranker → lineage segment
         registration → build middle → compression / preflight compress → build end →
-        firewall → directives → format output (glaciate when caching) →
+        firewall → directives → format output (cacheable prefix = core) →
         :class:`CompileResult` → assertions → lineage finalize → recorder → metrics →
         trace exporters.
         """
@@ -871,7 +876,10 @@ class ContextCompiler:
                     user_message, [m for m, _ in retrieved]
                 )
                 dens = {id(m): float(d) for m, d in ranked}
-                retrieved = [(m, _tier_for_object(m)) for m, _ in ranked]
+                tier_of = {id(m): t for m, t in retrieved}
+                retrieved = [
+                    (m, tier_of.get(id(m), _tier_for_object(m))) for m, _ in ranked
+                ]
                 segment_weights = [
                     dens.get(id(obj), 0.0) for obj, _ in retrieved
                 ]
@@ -897,8 +905,10 @@ class ContextCompiler:
             retrieved, start_index=1
         )
         if middle_extras:
-            for extra in middle_extras:
-                middle_segments.insert(0, extra)
+            middle_segments = list(middle_extras) + middle_segments
+            if segment_weights is not None:
+                # Caller-supplied extras rank ahead of reranked memories.
+                segment_weights = [float("inf")] * len(middle_extras) + segment_weights
 
         n_episodic = sum(1 for _, t in retrieved if t == TIER_EPISODIC)
         n_semantic = sum(1 for _, t in retrieved if t == TIER_SEMANTIC)
@@ -912,6 +922,7 @@ class ContextCompiler:
         raw_middle_text = "\n\n".join(seg[0] for seg in middle_segments)
         middle_tokens = _count_ctx(raw_middle_text)
         compression_strategy_used: Optional[str] = None
+        compressed_middle: Optional[str] = None
         compression_details: Dict[str, Any] = {}
         compression_token_delta: int = 0
 
@@ -942,8 +953,8 @@ class ContextCompiler:
                 compression_token_delta = int(cres.original_tokens - cres.compressed_tokens)
                 if cres.compressed and cres.compressed.strip():
                     middle_segments = [(cres.compressed.strip(), TIER_SEMANTIC)]
-                    ref_map = {}
-                    ref_map_type = {}
+                    segment_weights = None
+                    compressed_middle = cres.compressed.strip()
                     raw_middle_text = cres.compressed.strip()
                     middle_tokens = _count_ctx(raw_middle_text)
                 _record_jta_lineage_from_compression(
@@ -953,11 +964,15 @@ class ContextCompiler:
                 )
 
         if middle_tokens > threshold and raw_middle_text.strip() and compress_sync:
-            compressed = compress_sync(raw_middle_text, target_tokens, user_message)
+            try:
+                compressed = compress_sync(raw_middle_text, target_tokens, user_message)
+            except Exception as e:
+                logger.warning("compress_sync failed: %s", e, exc_info=True)
+                compressed = None
             if compressed and compressed.strip():
                 middle_segments = [(compressed.strip(), TIER_SEMANTIC)]
-                ref_map = {}
-                ref_map_type = {}
+                segment_weights = None
+                compressed_middle = compressed.strip()
 
         ranking_diag = _build_ranking_diagnostics_for_compile(
             prof,
@@ -985,6 +1000,9 @@ class ContextCompiler:
                     count_fn=_count_ctx,
                 )
             )
+        if compressed_middle is not None and fw_stats.get("segments_kept"):
+            # Compressed text keeps [Mem:N] references; resolve every one it still carries.
+            ref_map_kept = _ref_map_from_text(compressed_middle, ref_map)
         stale_survivors = _stale_survivor_memory_ids(list(retrieved), ref_map_kept)
 
         ref_map_type_kept: Dict[int, str] = {}
@@ -1050,7 +1068,7 @@ class ContextCompiler:
                 result.assertion_report = prof.assertions.run(result)
 
         if lineage is not None:
-            included = {str(getattr(obj, "id", f"seg_{i}")) for i, (obj, _) in enumerate(retrieved)}
+            included = set(ref_map_kept.values())
             result.lineage_report = lineage.finalize(
                 included_ids=included,
                 positions={},
@@ -1294,7 +1312,10 @@ class ContextCompiler:
                     user_message, [m for m, _ in retrieved]
                 )
                 dens = {id(m): float(d) for m, d in ranked}
-                retrieved = [(m, _tier_for_object(m)) for m, _ in ranked]
+                tier_of = {id(m): t for m, t in retrieved}
+                retrieved = [
+                    (m, tier_of.get(id(m), _tier_for_object(m))) for m, _ in ranked
+                ]
                 segment_weights = [
                     dens.get(id(obj), 0.0) for obj, _ in retrieved
                 ]
@@ -1320,8 +1341,10 @@ class ContextCompiler:
             retrieved, start_index=1
         )
         if middle_extras:
-            for extra in middle_extras:
-                middle_segments.insert(0, extra)
+            middle_segments = list(middle_extras) + middle_segments
+            if segment_weights is not None:
+                # Caller-supplied extras rank ahead of reranked memories.
+                segment_weights = [float("inf")] * len(middle_extras) + segment_weights
 
         n_episodic = sum(1 for _, t in retrieved if t == TIER_EPISODIC)
         n_semantic = sum(1 for _, t in retrieved if t == TIER_SEMANTIC)
@@ -1335,6 +1358,7 @@ class ContextCompiler:
         raw_middle_text = "\n\n".join(seg[0] for seg in middle_segments)
         middle_tokens = _count_ctx(raw_middle_text)
         compression_strategy_used: Optional[str] = None
+        compressed_middle: Optional[str] = None
         compression_details: Dict[str, Any] = {}
         compression_token_delta: int = 0
 
@@ -1365,8 +1389,8 @@ class ContextCompiler:
                 compression_token_delta = int(cres.original_tokens - cres.compressed_tokens)
                 if cres.compressed and cres.compressed.strip():
                     middle_segments = [(cres.compressed.strip(), TIER_SEMANTIC)]
-                    ref_map = {}
-                    ref_map_type = {}
+                    segment_weights = None
+                    compressed_middle = cres.compressed.strip()
                     raw_middle_text = cres.compressed.strip()
                     middle_tokens = _count_ctx(raw_middle_text)
                 _record_jta_lineage_from_compression(
@@ -1402,14 +1426,18 @@ class ContextCompiler:
                         )
                     except Exception as e:
                         logger.debug("Pre-flight cache set failed: %s", e)
-            elif not compressed and compress_sync is not None:
-                compressed = compress_sync(
-                    raw_middle_text, target_tokens, user_message
-                )
+            if not compressed and compress_sync is not None:
+                try:
+                    compressed = compress_sync(
+                        raw_middle_text, target_tokens, user_message
+                    )
+                except Exception as e:
+                    logger.warning("compress_sync failed: %s", e, exc_info=True)
+                    compressed = None
             if compressed and compressed.strip():
                 middle_segments = [(compressed.strip(), TIER_SEMANTIC)]
-                ref_map = {}
-                ref_map_type = {}
+                segment_weights = None
+                compressed_middle = compressed.strip()
 
         ranking_diag = _build_ranking_diagnostics_for_compile(
             prof,
@@ -1437,6 +1465,9 @@ class ContextCompiler:
                     count_fn=_count_ctx,
                 )
             )
+        if compressed_middle is not None and fw_stats.get("segments_kept"):
+            # Compressed text keeps [Mem:N] references; resolve every one it still carries.
+            ref_map_kept = _ref_map_from_text(compressed_middle, ref_map)
         stale_survivors = _stale_survivor_memory_ids(list(retrieved), ref_map_kept)
 
         ref_map_type_kept: Dict[int, str] = {}
@@ -1502,10 +1533,7 @@ class ContextCompiler:
                 result.assertion_report = prof.assertions.run(result)
 
         if lineage is not None:
-            included = {
-                str(getattr(obj, "id", f"seg_{i}"))
-                for i, (obj, _) in enumerate(retrieved)
-            }
+            included = set(ref_map_kept.values())
             result.lineage_report = lineage.finalize(
                 included_ids=included,
                 positions={},
@@ -1578,24 +1606,35 @@ class ContextCompiler:
         return result
 
 
+# OpenAI and Anthropic only cache prefixes of at least this many tokens.
+MIN_CACHEABLE_PREFIX_TOKENS = 1024
+
+
 def _build_output_messages(
     model_id: Optional[str],
     final_text: str,
     use_split: bool,
+    prefix_text: str = "",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """One system message; report the byte-stable prefix (``prefix_text``) when it is cacheable.
+
+    ``cacheable_prefix_chars`` lets callers split the content for explicit cache markers
+    (for example :func:`membrane.cache_format.anthropic_system_blocks`).
+    """
     cache_meta: Dict[str, Any] = {}
-    if model_id and use_split and has_prompt_caching(model_id):
-        gr = glaciate(final_text)
-        sys_msgs, use_cache = build_system_messages(model_id, gr.cacheable_prefix, gr.dynamic_tail)
-        messages = sys_msgs if sys_msgs else [{"role": "system", "content": final_text}]
-        if use_cache:
-            cache_meta = {
-                "prompt_cache_used": True,
-                "cacheable_prefix_tokens": gr.prefix_tokens,
-                "dynamic_tail_tokens": gr.tail_tokens,
-            }
+    messages: List[Dict[str, Any]] = [{"role": "system", "content": final_text}]
+    if not (model_id and use_split and has_prompt_caching(model_id)):
         return messages, cache_meta
-    return [{"role": "system", "content": final_text}], cache_meta
+    prefix = prefix_text if prefix_text.strip() and final_text.startswith(prefix_text) else ""
+    prefix_tokens = count_tokens(prefix)
+    if prefix_tokens >= MIN_CACHEABLE_PREFIX_TOKENS:
+        cache_meta = {
+            "prompt_cache_used": True,
+            "cacheable_prefix_chars": len(prefix),
+            "cacheable_prefix_tokens": prefix_tokens,
+            "dynamic_tail_tokens": count_tokens(final_text[len(prefix):]),
+        }
+    return messages, cache_meta
 
 
 def compile_anonymous(
@@ -1613,7 +1652,7 @@ def compile_anonymous(
     t0 = time.perf_counter()
     cap = max_tokens
     if model_id:
-        mc = get_context_cap_for_model(model_id)
+        mc = lookup_context_cap(model_id)
         if mc:
             cap = min(cap, mc)
     layout = ContextLayoutEngine(core_content=core_content)
@@ -1648,6 +1687,7 @@ def compile_anonymous(
         model_id,
         full,
         use_prompt_caching_split and bool(model_id and has_prompt_caching(model_id)),
+        prefix_text=core_text,
     )
     wall_ms = (time.perf_counter() - t0) * 1000.0
     cache_hit = bool(
@@ -1670,6 +1710,9 @@ def compile_anonymous(
             **cache_meta,
         },
     )
+    if total > cap:
+        # History is never trimmed here; report the overrun instead of hiding it.
+        result.metadata["budget_exceeded"] = True
     _emit_compile_metrics(
         metrics_callback,
         build_compile_metrics(
@@ -1741,7 +1784,20 @@ async def compile_prompt_async(
     Optional Phase 1 kwargs (``profile``, ``reranker``, …) are forwarded to
     :meth:`ContextCompiler.compile_async` so optional modules apply to the same path.
     """
-    if user_id is None:
+    plugins = (
+        profile, reranker, deduplicator, compression, policies, metrics, embedding_cache,
+        classifier, freshness, assertions, recorder, tokenizer_registry, trace_exporters,
+        enable_lineage, enable_profiler, metrics_collector, lineage_tracker,
+    )
+    needs_full_path = bool(
+        dynamic_directives
+        or retrieved_objects
+        or middle_segments_prefix
+        or compress_fn
+        or memory_placement != MEMORY_PLACEMENT_SYSTEM
+        or any(p is not None for p in plugins)
+    )
+    if user_id is None and not needs_full_path:
         return compile_anonymous(
             user_message=user_msg,
             conversation_messages=messages_list,
@@ -1810,15 +1866,18 @@ async def compile_prompt_async(
 
     result.metadata["current_stress"] = current_stress
     result.metadata["user_id"] = user_id
+    if user_id is None:
+        result.metadata["security_flag"] = SecurityFlag.ANONYMOUS_MODE.value
     if conversation_id is not None:
         result.metadata["conversation_id"] = conversation_id
 
-    if persist_ref_map_to_redis and conversation_id and result.ref_map:
+    if persist_ref_map_to_redis and conversation_id and user_id is not None:
         ref_type = result.ref_map_type or {}
         await set_ref_map_for_conversation(
             conversation_id,
             result.ref_map,
             ref_type or None,
+            user_id=user_id,
             redis_client=redis_client,
             redis_url=redis_url_for_ref_map,
         )

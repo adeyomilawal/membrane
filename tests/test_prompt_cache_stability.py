@@ -13,7 +13,7 @@ from membrane.firewall import count_tokens
 
 MODEL = "openai/gpt-4o"
 CORE = "\n".join(
-    f"Rule {i}: answer precisely, cite [Mem:N] when you rely on memory." for i in range(40)
+    f"Rule {i}: answer precisely, cite [Mem:N] when you rely on memory." for i in range(60)
 )
 HISTORY: List[Dict[str, Any]] = [
     {"role": "user", "content": "Hi, I am planning a trip to Lisbon."},

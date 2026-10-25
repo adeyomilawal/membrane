@@ -62,12 +62,19 @@ async def _redis_connection(
         await client.aclose()
 
 
+def _ref_map_key(conversation_id: str, user_id: Optional[str]) -> str:
+    if user_id:
+        return f"{_key_prefix()}{user_id}:{conversation_id}"
+    return f"{_key_prefix()}{conversation_id}"
+
+
 async def set_ref_map_for_conversation(
     conversation_id: str,
     ref_map: Dict[int, str],
     ref_map_type: Optional[Dict[int, str]] = None,
     *,
     ttl_seconds: Optional[int] = None,
+    user_id: Optional[str] = None,
     redis_client: Optional[Any] = None,
     redis_url: Optional[str] = None,
 ) -> None:
@@ -75,11 +82,13 @@ async def set_ref_map_for_conversation(
     Store ref_map and ref_map_type for tools that resolve [Mem:N] to global ids.
 
     Provide either ``redis_client`` or rely on ``MEMORY_OS_KERNEL_REDIS_URL`` / ``REDIS_URL``.
+    Pass ``user_id`` so equal conversation ids from different users never share a map.
+    An empty ``ref_map`` is stored too, replacing any stale map from an earlier turn.
     """
     if not conversation_id or not isinstance(ref_map, dict):
         return
     ttl = ttl_seconds if ttl_seconds is not None else os_config.get_ref_map_cache_ttl_seconds()
-    key = f"{_key_prefix()}{conversation_id}"
+    key = _ref_map_key(conversation_id, user_id)
     val = _serialize_ref_maps(ref_map, ref_map_type)
     async with _redis_connection(redis_client, redis_url) as client:
         if client is None:
@@ -93,13 +102,14 @@ async def set_ref_map_for_conversation(
 async def get_ref_map_for_conversation(
     conversation_id: str,
     *,
+    user_id: Optional[str] = None,
     redis_client: Optional[Any] = None,
     redis_url: Optional[str] = None,
 ) -> Tuple[Dict[int, str], Dict[int, str]]:
     """Return (ref_map, ref_map_type) or empty dicts on miss / error."""
     if not conversation_id:
         return {}, {}
-    key = f"{_key_prefix()}{conversation_id}"
+    key = _ref_map_key(conversation_id, user_id)
     async with _redis_connection(redis_client, redis_url) as client:
         if client is None:
             return {}, {}

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -57,29 +58,32 @@ def _load_once() -> Tuple[Dict[str, List[str]], Dict[str, int]]:
         _capabilities_map, _context_caps_map = _default_maps()
         return _capabilities_map, _context_caps_map
 
+    # Build locally, then publish both maps at once so readers never see a half-built map.
+
     caps = data.get("capabilities")
     if not isinstance(caps, dict):
         caps = {"_default": ["streaming_interrupt", "no_caching"]}
-    _capabilities_map = {}
+    cap_map: Dict[str, List[str]] = {}
     for k, v in caps.items():
         if isinstance(v, list):
-            _capabilities_map[k] = [str(x) for x in v]
+            cap_map[k] = [str(x) for x in v]
         else:
-            _capabilities_map[k] = ["streaming_interrupt", "no_caching"]
+            cap_map[k] = ["streaming_interrupt", "no_caching"]
 
     caps_int = data.get("context_caps")
     if not isinstance(caps_int, dict):
         caps_int = {"_default": 8192}
-    _context_caps_map = {}
+    ctx_map: Dict[str, int] = {}
     for k, v in caps_int.items():
         try:
-            _context_caps_map[k] = int(v)
+            ctx_map[k] = int(v)
         except (TypeError, ValueError):
-            _context_caps_map[k] = 8192
-    if "_default" not in _context_caps_map:
-        _context_caps_map["_default"] = 8192
+            ctx_map[k] = 8192
+    if "_default" not in ctx_map:
+        ctx_map["_default"] = 8192
 
-    return _capabilities_map, _context_caps_map
+    _capabilities_map, _context_caps_map = cap_map, ctx_map
+    return cap_map, ctx_map
 
 
 def reload_capability_maps() -> None:
@@ -90,17 +94,68 @@ def reload_capability_maps() -> None:
     _load_once()
 
 
+_DATE_SUFFIX = re.compile(r"-(\d{8}|\d{4}-\d{2}-\d{2}|latest)$")
+_warned_unknown: set = set()
+
+
+def _normalize(model_id: str) -> str:
+    """Lowercase, dots as dashes, no date or ``latest`` suffix."""
+    return _DATE_SUFFIX.sub("", model_id.strip().lower().replace(".", "-"))
+
+
+def _resolve_key(model_id: Optional[str], keys: Sequence[str]) -> Optional[str]:
+    """Map a model id to a registry key: exact, normalized, then longest prefix.
+
+    Matching ignores the provider prefix when ``model_id`` has none, so ``gpt-4o``
+    and ``openai/gpt-4o-2024-08-06`` both resolve to ``openai/gpt-4o``.
+    """
+    if not model_id:
+        return None
+    if model_id in keys:
+        return model_id
+    target = _normalize(model_id)
+    bare_target = target.split("/", 1)[-1]
+    best: Optional[str] = None
+    best_len = 0
+    for key in keys:
+        if key == "_default":
+            continue
+        norm = _normalize(key)
+        candidate = norm if "/" in target else norm.split("/", 1)[-1]
+        subject = target if "/" in target else bare_target
+        if subject == candidate or subject.startswith(candidate + "-"):
+            if len(candidate) > best_len:
+                best, best_len = key, len(candidate)
+    if best is None and model_id not in _warned_unknown:
+        _warned_unknown.add(model_id)
+        logger.warning(
+            "Model %r is not in the capability map; using defaults (no prompt caching, "
+            "no context cap). Add it via LLM_CAPABILITY_MAP_PATH.",
+            model_id,
+        )
+    return best
+
+
 def get_capabilities_for_model(model_id: Optional[str]) -> List[str]:
     cap_map, _ = _load_once()
-    if model_id and model_id in cap_map:
-        return cap_map[model_id]
-    return cap_map.get("_default", ["streaming_interrupt", "no_caching"])
+    key = _resolve_key(model_id, list(cap_map))
+    if key is not None:
+        return list(cap_map[key])
+    return list(cap_map.get("_default", ["streaming_interrupt", "no_caching"]))
+
+
+def lookup_context_cap(model_id: Optional[str]) -> Optional[int]:
+    """Context cap for a known model, or ``None`` when the model is not in the map."""
+    _, ctx_map = _load_once()
+    key = _resolve_key(model_id, list(ctx_map))
+    return ctx_map[key] if key is not None else None
 
 
 def get_context_cap_for_model(model_id: Optional[str]) -> int:
+    cap = lookup_context_cap(model_id)
+    if cap is not None:
+        return cap
     _, ctx_map = _load_once()
-    if model_id and model_id in ctx_map:
-        return ctx_map[model_id]
     return ctx_map.get("_default", 8192)
 
 
@@ -114,7 +169,7 @@ def has_streaming_interrupt(model_id: Optional[str]) -> bool:
 
 def get_full_capability_map() -> Dict[str, List[str]]:
     cap_map, _ = _load_once()
-    return dict(cap_map)
+    return {k: list(v) for k, v in cap_map.items()}
 
 
 def get_full_context_caps() -> Dict[str, int]:

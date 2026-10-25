@@ -96,6 +96,7 @@ from membrane.memory_protocol import (
 from membrane.provider_registry import (
     get_capabilities_for_model,
     get_context_cap_for_model,
+    lookup_context_cap,
     get_full_capability_map,
     get_full_context_caps,
     has_prompt_caching,
@@ -176,6 +177,7 @@ __all__ = [
     "embed_texts",
     "get_capabilities_for_model",
     "get_context_cap_for_model",
+    "lookup_context_cap",
     "get_current_environment_state",
     "get_full_capability_map",
     "get_full_context_caps",
