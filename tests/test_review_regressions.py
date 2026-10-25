@@ -219,7 +219,10 @@ def test_registry_returns_copies():
 async def test_anonymous_async_keeps_directives_and_placement():
     r = await compile_prompt_async(
         user_msg="q",
-        messages_list=[{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "ok"}],
+        messages_list=[
+            {"role": "user", "content": "earlier"},
+            {"role": "assistant", "content": "ok"},
+        ],
         user_id=None,
         max_tokens=4000,
         dynamic_directives=["DIRECTIVE"],
@@ -280,7 +283,9 @@ def test_cache_prefix_is_exactly_the_core():
 
 
 def test_short_core_does_not_claim_caching():
-    r = ContextCompiler(max_tokens=4000, model_id="openai/gpt-4o", core_content="Be brief.").compile(
+    r = ContextCompiler(
+        max_tokens=4000, model_id="openai/gpt-4o", core_content="Be brief."
+    ).compile(
         memories=_facts(3), user_message="hi"
     )
     assert not r.metadata.get("prompt_cache_used")

@@ -21,7 +21,7 @@ import asyncio
 import inspect
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 from collections.abc import Awaitable, Callable, Sequence
 
 from membrane.profile import PRESET_NAMES, MembraneProfile
@@ -33,10 +33,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MemoryProvider = Union[
-    Callable[[Sequence[str]], Awaitable[Sequence[Any]]],
-    Callable[[Sequence[str]], Sequence[Any]],
-]
+MemoryProvider = (
+    Callable[[Sequence[str]], Awaitable[Sequence[Any]]]
+    | Callable[[Sequence[str]], Sequence[Any]]
+)
 
 
 def _require_mcp():
@@ -64,7 +64,8 @@ async def _maybe_await(res: Any) -> Any:
 class MembraneMCPServer:
     """
     Registers tools: ``membrane_compile``, ``membrane_inspect``, and (unless disabled)
-    ``membrane_compile_conversation`` for multi-turn state via :class:`~membrane.conversation.manager.ConversationManager`.
+    ``membrane_compile_conversation`` for multi-turn state via
+    :class:`~membrane.conversation.manager.ConversationManager`.
 
     Resources: ``membrane://profiles``, ``membrane://last_compile``, ``membrane://metrics``.
 

@@ -73,7 +73,10 @@ def get_preflight_target_tokens() -> int:
 
 def get_preflight_analyst_model() -> str:
     """Model identifier hint for Pre-Flight Analyst (caller passes to LLM adapter)."""
-    return os.environ.get("PREFLIGHT_ANALYST_MODEL", "openai/gpt-4o-mini").strip() or "openai/gpt-4o-mini"
+    return (
+        os.environ.get("PREFLIGHT_ANALYST_MODEL", "openai/gpt-4o-mini").strip()
+        or "openai/gpt-4o-mini"
+    )
 
 
 def get_lod_attention_shift_cosine_threshold() -> float:
@@ -138,7 +141,11 @@ def get_ref_map_cache_ttl_seconds() -> int:
 
 def get_default_redis_url() -> str | None:
     """Optional default Redis URL for ref_map when not passed explicitly."""
-    url = os.environ.get("MEMBRANE_REDIS_URL") or os.environ.get("MEMORY_OS_KERNEL_REDIS_URL") or os.environ.get("REDIS_URL")
+    url = (
+        os.environ.get("MEMBRANE_REDIS_URL")
+        or os.environ.get("MEMORY_OS_KERNEL_REDIS_URL")
+        or os.environ.get("REDIS_URL")
+    )
     return url.strip() if url else None
 
 

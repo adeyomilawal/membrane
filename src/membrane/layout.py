@@ -63,7 +63,8 @@ class ContextLayoutEngine:
             line, truncated = DenseSerializer.format_checked(obj, local_index=local_idx)
             self.last_truncated_count += int(truncated)
             kind = infer_memory_kind(obj)
-            # Episodic/procedural already start with [Mem:N]; semantic [fact] lines get the prefix here
+            # Episodic/procedural already start with [Mem:N]; semantic [fact] lines get the
+            # prefix here
             if kind == "semantic" and not line.strip().startswith("[Mem:"):
                 line = f"[Mem:{local_idx}] {line}"
             segments.append((line, tier))

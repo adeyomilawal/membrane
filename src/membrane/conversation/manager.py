@@ -55,7 +55,7 @@ class ConversationManager:
         if not old:
             return
         if self._summary:
-            old = [("system", f"Previous summary: {self._summary}")] + old
+            old = [("system", f"Previous summary: {self._summary}"), *old]
         self._summary = summarize_turns(old, self._summarization_fn)
         self._turns = self._turns[-keep:]
 

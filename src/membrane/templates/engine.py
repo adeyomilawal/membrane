@@ -20,7 +20,9 @@ class TemplateMissingVariable(KeyError):
 
 
 def merge_block_nodes(nodes: list[Any], overrides: dict[str, list[Any]]) -> list[Any]:
-    """Apply child ``block`` overrides onto a parent AST (single ``extends`` level; nested blocks supported)."""
+    """Apply child ``block`` overrides onto a parent AST (single ``extends`` level; nested
+    blocks supported).
+    """
     out: list[Any] = []
     for n in nodes:
         if isinstance(n, BlockNode):
@@ -100,7 +102,7 @@ class PromptTemplate:
                 if n.seq not in bound:
                     names.append(n.seq)
                 names.extend(self._collect_vars(n.children, bound | {n.item}))
-            elif isinstance(n, RoleBlockNode) or isinstance(n, BlockNode):
+            elif isinstance(n, (RoleBlockNode, BlockNode)):
                 names.extend(self._collect_vars(n.children, bound))
         return names
 

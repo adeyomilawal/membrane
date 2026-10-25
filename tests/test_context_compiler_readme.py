@@ -16,8 +16,12 @@ def test_compile_readme_quickstart():
     # Two semantic rows: both serialize with `[Mem:N] ...` so ref_map preserves 1 and 2
     # (episodic lines use `[Mem:N|date]:` which the firewall ref extractor does not index).
     memories = [
-        MemoryItem(id="1", content="User prefers concise answers.", memory_type="semantic", priority=2),
-        MemoryItem(id="2", content="Also discussed asyncio yesterday.", memory_type="semantic", priority=2),
+        MemoryItem(
+            id="1", content="User prefers concise answers.", memory_type="semantic", priority=2
+        ),
+        MemoryItem(
+            id="2", content="Also discussed asyncio yesterday.", memory_type="semantic", priority=2
+        ),
     ]
 
     result: CompileResult = compiler.compile(

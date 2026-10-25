@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -68,10 +69,8 @@ def get_current_environment_state() -> EnvironmentSnapshot | None:
 
 def clear_environment_snapshot() -> None:
     """Clear snapshot (e.g. after request end)."""
-    try:
+    with contextlib.suppress(LookupError):
         _current_snapshot.set(None)
-    except LookupError:
-        pass
 
 
 def capture_cpu_load() -> float | None:

@@ -33,7 +33,9 @@ def _sigmoid(x: float) -> float:
 
 
 def _default_weights() -> list[list[float]]:
-    """Hand-tuned weights: rows = classes (episodic, semantic, procedural, instructional, conversational)."""
+    """Hand-tuned weights: rows = classes (episodic, semantic, procedural, instructional,
+    conversational).
+    """
     rng = FEATURE_DIM
     rows = []
     # episodic: temporal + conversational markers
@@ -97,7 +99,9 @@ class MemoryClassifier:
                 if isinstance(b, list) and len(b) == 5:
                     self._biases = [float(x) for x in b]
             except Exception:
-                logger.warning("failed to load classifier weights from %s; using defaults", p, exc_info=True)
+                logger.warning(
+                    "failed to load classifier weights from %s; using defaults", p, exc_info=True
+                )
 
     def classify(self, text: str) -> ClassificationResult:
         feats = extract_features(text)

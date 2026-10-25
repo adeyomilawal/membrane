@@ -80,7 +80,7 @@ def compute_attention_shift(
     recent = list(last_user_messages)[-3:] if last_user_messages else []
     if not recent:
         return False
-    texts = list(recent) + [current_user_message]
+    texts = [*list(recent), current_user_message]
     emb = embed_texts(texts)
     if emb is None or emb.shape[0] < 2:
         return False
@@ -116,7 +116,7 @@ def compute_attention_shift_with_embeddings(
     recent = list(last_user_message_embeddings)[-3:]
     if not recent:
         return False
-    stack = np.array(list(recent) + [list(current_user_embedding)], dtype=np.float64)
+    stack = np.array([*list(recent), list(current_user_embedding)], dtype=np.float64)
     if stack.shape[0] < 2:
         return False
     centroid = np.mean(stack[:-1], axis=0)

@@ -32,9 +32,13 @@ class PolicyCondition:
         q = query.lower()
         mid = model_id or ""
         # every recognized key must hold (AND)
-        if "query_contains_any" in d and not any(str(n).lower() in q for n in d["query_contains_any"]):
+        if "query_contains_any" in d and not any(
+            str(n).lower() in q for n in d["query_contains_any"]
+        ):
             return False
-        if "query_contains_all" in d and not all(str(n).lower() in q for n in d["query_contains_all"]):
+        if "query_contains_all" in d and not all(
+            str(n).lower() in q for n in d["query_contains_all"]
+        ):
             return False
         if "query_length_below" in d and not len(query) < int(d["query_length_below"]):
             return False
@@ -44,13 +48,15 @@ class PolicyCondition:
             return False
         if "memory_count_above" in d and not len(memories) > int(d["memory_count_above"]):
             return False
-        if "estimated_tokens_above" in d and not estimated_tokens > int(d["estimated_tokens_above"]):
+        if "estimated_tokens_above" in d and not estimated_tokens > int(
+            d["estimated_tokens_above"]
+        ):
             return False
-        if "estimated_tokens_below" in d and not estimated_tokens < int(d["estimated_tokens_below"]):
+        if "estimated_tokens_below" in d and not estimated_tokens < int(
+            d["estimated_tokens_below"]
+        ):
             return False
-        if "model_is" in d and not (mid == d["model_is"] or mid.startswith(d["model_is"])):
-            return False
-        return True
+        return not ("model_is" in d and not (mid == d["model_is"] or mid.startswith(d["model_is"])))
 
 
 _LIST_KEYS = ("query_contains_any", "query_contains_all")
@@ -62,11 +68,19 @@ _INT_KEYS = (
     "estimated_tokens_above",
     "estimated_tokens_below",
 )
-_CONDITION_KEYS = frozenset(("always", "model_is") + _LIST_KEYS + _INT_KEYS)
+_CONDITION_KEYS = frozenset(("always", "model_is", *_LIST_KEYS, *_INT_KEYS))
 
 
 _ACTION_KEYS = frozenset(
-    ("set_budget", "set_max_tokens", "set_compression_target", "pin_memory_kind", "enable", "disable", "override")
+    (
+        "set_budget",
+        "set_max_tokens",
+        "set_compression_target",
+        "pin_memory_kind",
+        "enable",
+        "disable",
+        "override",
+    )
 )
 _MEMORY_KINDS = frozenset(("procedural", "semantic", "episodic"))
 
@@ -92,7 +106,9 @@ def _validate_condition(policy_name: str, cond: dict[str, Any]) -> None:
     """Raise ``ValueError`` for empty, unknown-key, or malformed conditions."""
     unknown = sorted(set(cond) - _CONDITION_KEYS)
     if unknown or not cond:
-        raise ValueError(f"policy {policy_name!r}: unrecognized condition keys {unknown or list(cond)}")
+        raise ValueError(
+            f"policy {policy_name!r}: unrecognized condition keys {unknown or list(cond)}"
+        )
     for k in _LIST_KEYS:
         if k in cond and (not isinstance(cond[k], (list, tuple)) or not cond[k]):
             raise ValueError(f"policy {policy_name!r}: {k} must be a non-empty list")
@@ -144,7 +160,9 @@ class PolicyEngine:
                 continue
             name = str(item.get("name", "anonymous"))
             if "condition" not in item:
-                raise ValueError(f"policy {name!r}: missing condition (use \"always\" to match every request)")
+                raise ValueError(
+                    f"policy {name!r}: missing condition (use \"always\" to match every request)"
+                )
             cr = item.get("condition")
             if cr == "always" or cr is True:
                 cond_raw: Any = {"always": True}

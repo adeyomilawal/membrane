@@ -14,7 +14,8 @@ _CODE_BLOCK = re.compile(
 )
 _LIST = re.compile(r"^\s*[\d]+[\.\)]\s+|^\s*[-*]\s+", re.M)
 _TEMPORAL = re.compile(
-    r"\b(yesterday|last week|last month|remember when|i recall|conversation|you said)\b|\b(?:user|assistant):",
+    r"\b(yesterday|last week|last month|remember when|i recall|conversation|you said)\b"
+    r"|\b(?:user|assistant):",
     re.I,
 )
 _DEF = re.compile(r"\b(is a |is an |defined as|refers to|means )\b", re.I)

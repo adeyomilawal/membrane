@@ -14,7 +14,9 @@ def test_estimate_matches_compile_and_includes_segments():
         core_content="You are a helpful assistant.",
     )
     memories = [
-        MemoryItem(id="1", content="User prefers concise answers.", memory_type="semantic", priority=2),
+        MemoryItem(
+            id="1", content="User prefers concise answers.", memory_type="semantic", priority=2
+        ),
     ]
     msg = "Hello."
 

@@ -123,9 +123,10 @@ def _resolve_key(model_id: str | None, keys: Sequence[str]) -> str | None:
         norm = _normalize(key)
         candidate = norm if "/" in target else norm.split("/", 1)[-1]
         subject = target if "/" in target else bare_target
-        if subject == candidate or subject.startswith(candidate + "-"):
-            if len(candidate) > best_len:
-                best, best_len = key, len(candidate)
+        if (
+            subject == candidate or subject.startswith(candidate + "-")
+        ) and len(candidate) > best_len:
+            best, best_len = key, len(candidate)
     if best is None and model_id not in _warned_unknown:
         _warned_unknown.add(model_id)
         logger.warning(

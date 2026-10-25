@@ -24,12 +24,16 @@ A1 = "May is lovely there. Do you want food or museum suggestions?"
 U2 = "Food, mostly seafood."
 
 MEMS_TURN1 = [
-    MemoryItem(id="10", content="User is vegetarian on weekdays.", memory_type="semantic", priority=2),
+    MemoryItem(
+        id="10", content="User is vegetarian on weekdays.", memory_type="semantic", priority=2
+    ),
     MemoryItem(id="11", content="User dislikes crowded tours.", memory_type="semantic", priority=2),
 ]
 MEMS_TURN2 = [
     MemoryItem(id="20", content="User loves grilled sardines.", memory_type="semantic", priority=2),
-    MemoryItem(id="21", content="User has a shellfish allergy.", memory_type="semantic", priority=2),
+    MemoryItem(
+        id="21", content="User has a shellfish allergy.", memory_type="semantic", priority=2
+    ),
 ]
 
 
@@ -39,7 +43,7 @@ def _serialize(messages: list[dict[str, Any]]) -> str:
 
 def _common_prefix(a: str, b: str) -> str:
     n = 0
-    for x, y in zip(a, b):
+    for x, y in zip(a, b, strict=False):
         if x != y:
             break
         n += 1
@@ -49,7 +53,8 @@ def _common_prefix(a: str, b: str) -> str:
 def _two_turns(**compiler_kw: Any):
     cc = ContextCompiler(max_tokens=8192, model_id=MODEL, core_content=CORE, **compiler_kw)
     t1 = cc.compile(memories=MEMS_TURN1, user_message=U1, conversation_messages=list(HISTORY))
-    history2 = HISTORY + [
+    history2 = [
+        *HISTORY,
         {"role": "user", "content": U1},
         {"role": "assistant", "content": A1},
     ]
@@ -115,13 +120,19 @@ def test_end_placement_directives_leave_system_message():
 
 def test_end_placement_firewall_trims_and_prunes_ref_map():
     big = [
-        MemoryItem(id=str(i), content=f"Fact {i}: " + "detail " * 40, memory_type="semantic", priority=2)
+        MemoryItem(
+            id=str(i), content=f"Fact {i}: " + "detail " * 40, memory_type="semantic", priority=2
+        )
         for i in range(10)
     ]
-    roomy = ContextCompiler(max_tokens=100_000, model_id=MODEL, core_content=CORE, memory_placement="end")
+    roomy = ContextCompiler(
+        max_tokens=100_000, model_id=MODEL, core_content=CORE, memory_placement="end"
+    )
     full = roomy.compile(memories=big, user_message=U1, conversation_messages=list(HISTORY))
     budget = full.metadata["token_count"] - 150
-    tight = ContextCompiler(max_tokens=budget, model_id=MODEL, core_content=CORE, memory_placement="end")
+    tight = ContextCompiler(
+        max_tokens=budget, model_id=MODEL, core_content=CORE, memory_placement="end"
+    )
     r = tight.compile(memories=big, user_message=U1, conversation_messages=list(HISTORY))
     assert r.messages[:-1] == full.messages[:-1]  # history and system never trimmed
     assert 0 < len(r.ref_map) < len(full.ref_map)
@@ -158,7 +169,9 @@ def _long_turns(n_exchanges: int, **compiler_kw: Any):
     history: list[dict[str, Any]] = []
     for i in range(n_exchanges):
         history.append({"role": "user", "content": f"Question {i}: what about district {i}?"})
-        history.append({"role": "assistant", "content": f"District {i} is known for " + "tiles " * 30})
+        history.append(
+            {"role": "assistant", "content": f"District {i} is known for " + "tiles " * 30}
+        )
     t1 = cc.compile(memories=MEMS_TURN1, user_message=U1, conversation_messages=list(history))
     history += [{"role": "user", "content": U1}, {"role": "assistant", "content": A1}]
     t2 = cc.compile(memories=MEMS_TURN2, user_message=U2, conversation_messages=history)
@@ -191,7 +204,9 @@ def test_end_placement_preserves_tool_call_history():
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "wx", "arguments": "{}"}}],
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "wx", "arguments": "{}"}}
+            ],
         },
         {"role": "tool", "tool_call_id": "c1", "content": "22C, sunny"},
         {"role": "assistant", "content": [{"type": "text", "text": "It is 22C and sunny."}]},

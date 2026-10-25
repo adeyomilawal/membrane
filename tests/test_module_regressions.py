@@ -34,7 +34,10 @@ def test_template_if_condition_optional():
 def test_template_role_blocks_not_merged():
     from membrane.templates.engine import PromptTemplate
 
-    src = "{% system %}S{% end_system %}\n{% user %}u1{% end_user %}\n{% assistant %}a{% end_assistant %}\n{% user %}u2{% end_user %}"
+    src = (
+        "{% system %}S{% end_system %}\n{% user %}u1{% end_user %}\n"
+        "{% assistant %}a{% end_assistant %}\n{% user %}u2{% end_user %}"
+    )
     msgs = PromptTemplate(src).render()
     assert [(m["role"], m["content"]) for m in msgs] == [
         ("system", "S"),
@@ -47,7 +50,9 @@ def test_template_role_blocks_not_merged():
 def test_template_whitespace_between_blocks_no_empty_system():
     from membrane.templates.engine import PromptTemplate
 
-    msgs = PromptTemplate("\n{% user %}hi{% end_user %}\n\n{% assistant %}yo{% end_assistant %}\n").render()
+    msgs = PromptTemplate(
+        "\n{% user %}hi{% end_user %}\n\n{% assistant %}yo{% end_assistant %}\n"
+    ).render()
     assert [m["role"] for m in msgs] == ["user", "assistant"]
 
 
@@ -76,7 +81,9 @@ def test_llamaindex_postprocessor_is_base_postprocessor():
 
     pp = MembraneNodePostprocessor(FakeCompiler())
     assert isinstance(pp, BaseNodePostprocessor)
-    out = pp.postprocess_nodes([NodeWithScore(node=TextNode(text="x"), score=0.5)], QueryBundle("q"))
+    out = pp.postprocess_nodes(
+        [NodeWithScore(node=TextNode(text="x"), score=0.5)], QueryBundle("q")
+    )
     assert isinstance(out[0], NodeWithScore)
     assert out[0].node.get_content() == "compiled"
 
@@ -250,7 +257,9 @@ def test_freshness_tolerates_frozen_objects():
 def test_recursive_strategy_preface_and_absolute_offsets():
     from membrane.chunking.strategies import RecursiveStrategy
 
-    text = "Intro paragraph before any heading.\n\n# Title\n\nBody text here.\n\n## Sub\n\nMore body."
+    text = (
+        "Intro paragraph before any heading.\n\n# Title\n\nBody text here.\n\n## Sub\n\nMore body."
+    )
     chunks = RecursiveStrategy().chunk(text, max_tokens=50)
     assert chunks[0].content.startswith("Intro")
     assert chunks[0].start_char == 0
@@ -262,7 +271,9 @@ def test_fixed_strategy_large_overlap_does_not_explode():
     from membrane.chunking.strategies import FixedStrategy
 
     text = "abcdefghij" * 100
-    chunks = FixedStrategy().chunk(text, max_tokens=5, overlap_tokens=50, tokenizer=lambda s: len(s) // 2)
+    chunks = FixedStrategy().chunk(
+        text, max_tokens=5, overlap_tokens=50, tokenizer=lambda s: len(s) // 2
+    )
     assert len(chunks) < 600
     assert chunks[-1].end_char == len(text)
     starts = [c.start_char for c in chunks]
@@ -401,7 +412,9 @@ def test_dedup_not_transitive():
     from membrane.dedup.deduplicator import SemanticDeduplicator
 
     vecs = {"a": [1.0, 0.0], "b": [0.8, 0.6], "c": [0.28, 0.96]}  # a~b, b~c, a!~c at 0.75
-    d = SemanticDeduplicator(similarity_threshold=0.75, embedding_fn=lambda ts: [vecs[t] for t in ts])
+    d = SemanticDeduplicator(
+        similarity_threshold=0.75, embedding_fn=lambda ts: [vecs[t] for t in ts]
+    )
     res = d.deduplicate(["a", "b", "c"])
     assert res.merge_map == {1: 0}
     assert "c" in res.kept

@@ -18,7 +18,7 @@ _MODEL_FAILED = False
 def _cosine(a: list[float], b: list[float]) -> float:
     import math
 
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(x * x for x in b))
     if na == 0 or nb == 0:
@@ -47,7 +47,9 @@ def _get_model() -> Any:
             _MODEL = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
         except Exception:
             _MODEL_FAILED = True
-            logger.warning("fastembed unavailable; dedup falls back to hash embeddings", exc_info=True)
+            logger.warning(
+                "fastembed unavailable; dedup falls back to hash embeddings", exc_info=True
+            )
     return _MODEL
 
 

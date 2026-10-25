@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import logging
 import time
@@ -49,10 +50,8 @@ class SignalBus:
         lst = self._handlers.get(kind)
         if not lst:
             return
-        try:
+        with contextlib.suppress(ValueError):
             lst.remove(handler)
-        except ValueError:
-            pass
 
     async def emit(self, signal: Signal) -> str | None:
         for h in list(self._handlers.get(signal.kind, [])):

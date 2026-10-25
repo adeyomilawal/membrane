@@ -193,7 +193,7 @@ class RecursiveStrategy:
                 tokenizer=tok,
             ):
                 chunks.append(c)
-        for i, (s, e, level) in enumerate(hd):
+        for i, (s, _e, level) in enumerate(hd):
             nxt = hd[i + 1][0] if i + 1 < len(hd) else len(text)
             block = text[s:nxt]
             sub = ParagraphStrategy().chunk(
@@ -224,6 +224,6 @@ class SemanticStrategy:
         tokenizer: Callable[[str], int] | None = None,
     ) -> list[Chunk]:
         tok = tokenizer or _default_tok()
-        boundaries = [0] + detect_topic_shifts(text, self._embed_fn) + [len(text)]
+        boundaries = [0, *detect_topic_shifts(text, self._embed_fn), len(text)]
         spans = [(boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)]
         return _pack_units(text, spans, max_tokens, tok, "semantic")

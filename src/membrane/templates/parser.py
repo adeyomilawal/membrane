@@ -66,7 +66,14 @@ def _extends_name(tag: str) -> str | None:
 
 
 def parse_nodes(tokens: list[Token], pos: list, end_pred) -> list[Any]:
-    from membrane.templates.types import BlockNode, ForNode, IfNode, RoleBlockNode, TextNode, VarNode
+    from membrane.templates.types import (
+        BlockNode,
+        ForNode,
+        IfNode,
+        RoleBlockNode,
+        TextNode,
+        VarNode,
+    )
 
     nodes: list[Any] = []
     while pos[0] < len(tokens):
@@ -88,7 +95,11 @@ def parse_nodes(tokens: list[Token], pos: list, end_pred) -> list[Any]:
             pos[0] += 1
             if tag.startswith("if "):
                 cond = tag[3:].strip()
-                inner = parse_nodes(tokens, pos, lambda tt: tt.kind == TokType.TAG and tt.value.strip() == "endif")
+                inner = parse_nodes(
+                    tokens,
+                    pos,
+                    lambda tt: tt.kind == TokType.TAG and tt.value.strip() == "endif",
+                )
                 if pos[0] >= len(tokens) or tokens[pos[0]].value.strip() != "endif":
                     raise ValueError("expected endif")
                 pos[0] += 1
@@ -100,7 +111,11 @@ def parse_nodes(tokens: list[Token], pos: list, end_pred) -> list[Any]:
                     raise ValueError("for needs 'in'")
                 item, seq = rest.split(" in ", 1)
                 item, seq = item.strip(), seq.strip()
-                inner = parse_nodes(tokens, pos, lambda tt: tt.kind == TokType.TAG and tt.value.strip() == "endfor")
+                inner = parse_nodes(
+                    tokens,
+                    pos,
+                    lambda tt: tt.kind == TokType.TAG and tt.value.strip() == "endfor",
+                )
                 if pos[0] >= len(tokens) or tokens[pos[0]].value.strip() != "endfor":
                     raise ValueError("expected endfor")
                 pos[0] += 1
@@ -159,7 +174,9 @@ def parse_document(source: str) -> ParsedDocument:
                     pos[0] += 1
                     continue
                 if tt.kind != TokType.TAG or not tt.value.strip().startswith("block "):
-                    raise ValueError("after {% extends %} only {% block name %} ... {% endblock %} are allowed")
+                    raise ValueError(
+                        "after {% extends %} only {% block name %} ... {% endblock %} are allowed"
+                    )
                 tag = tt.value.strip()
                 rest = tag[6:].strip()
                 bname = rest.split()[0] if rest else ""

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from membrane.memory_protocol import KernelMemoryObject
 
 
 def node_to_memory(node: Any) -> KernelMemoryObject:
-    """Convert a LlamaIndex ``NodeWithScore`` (or similar) to :class:`~membrane.memory_protocol.KernelMemoryObject`.
+    """Convert a LlamaIndex ``NodeWithScore`` (or similar) to
+    :class:`~membrane.memory_protocol.KernelMemoryObject`.
 
     The retrieval score becomes ``relevance_score``; the firewall tier is always 2 (semantic).
     """
@@ -21,10 +23,8 @@ def node_to_memory(node: Any) -> KernelMemoryObject:
         score = node.metadata.get("score")
     relevance = 1.0
     if score is not None:
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             relevance = max(0.0, float(score))
-        except (TypeError, ValueError):
-            pass
     return KernelMemoryObject(
         id=str(nid),
         payload=str(text),

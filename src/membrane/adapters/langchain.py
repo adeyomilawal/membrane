@@ -9,6 +9,8 @@ chain or raise :class:`membrane.exceptions.MemoryCollisionError` if both are det
 
 from __future__ import annotations
 
+import contextlib
+
 from typing import Any, Literal, cast
 from collections.abc import Sequence
 
@@ -96,10 +98,8 @@ def disable_langchain_memory(chain: Any) -> Any:
     mem_attrs = ("memory", "memory_key")
     for a in mem_attrs:
         if hasattr(chain, a):
-            try:
+            with contextlib.suppress(Exception):
                 setattr(chain, a, None)
-            except Exception:
-                pass
     return chain
 
 

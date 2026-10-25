@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import threading
 import time
@@ -41,7 +42,8 @@ class EmbeddingCache:
     Content-hash keyed cache for embedding vectors.
 
     ``backend='memory'`` uses a process-local LRU. ``backend='redis'`` stores
-    JSON-serialized vectors under keys ``membrane:emb:{sha256}``. ``model_id`` namespaces keys per embedding model.
+    JSON-serialized vectors under keys ``membrane:emb:{sha256}``. ``model_id`` namespaces keys
+    per embedding model.
     """
 
     def __init__(
@@ -164,7 +166,7 @@ class EmbeddingCache:
         self._count(hits=hits, misses=misses)
         if pending_texts:
             computed = embed_fn(pending_texts)
-            for (key, idxs), vec in zip(pending.items(), computed):
+            for (key, idxs), vec in zip(pending.items(), computed, strict=False):
                 self._store(key, vec)
                 for idx in idxs:
                     out[idx] = list(vec)
@@ -173,10 +175,8 @@ class EmbeddingCache:
     def invalidate(self, text: str) -> None:
         key = self._key(text)
         if self._use_redis():
-            try:
+            with contextlib.suppress(Exception):
                 self._redis.delete(f"membrane:emb:{key}")  # type: ignore[union-attr]
-            except Exception:
-                pass
         with self._lock:
             self._lru.pop(key, None)
             self._stats.size = len(self._lru)

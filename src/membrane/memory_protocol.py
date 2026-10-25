@@ -62,7 +62,9 @@ class KernelMemoryObject:
 
     @property
     def priority(self) -> int:
-        """Matches :class:`MemoryItem` / firewall tier for :func:`membrane.compiler._tier_for_object`."""
+        """Matches :class:`MemoryItem` / firewall tier for
+        :func:`membrane.compiler._tier_for_object`.
+        """
         return self.semantic_tier
 
     @property
@@ -79,10 +81,7 @@ class KernelMemoryObject:
         if "payload" not in data:
             raise ValueError("KernelMemoryObject requires 'payload'")
         raw = data["payload"]
-        if isinstance(raw, str):
-            payload_s = raw
-        else:
-            payload_s = json.dumps(raw, sort_keys=True, default=str)
+        payload_s = raw if isinstance(raw, str) else json.dumps(raw, sort_keys=True, default=str)
         st = max(1, min(3, int(data.get("semantic_tier", 2))))
         rs = float(data.get("relevance_score", 1.0))
         tw = float(data.get("temporal_weight", 1.0))
@@ -260,6 +259,9 @@ def infer_memory_kind(obj: Any) -> Literal["semantic", "episodic", "procedural"]
     name = getattr(obj, "name", None)
     if steps is not None and name is not None:
         return "procedural"
-    if getattr(obj, "stage3_synthesis", None) is not None or getattr(obj, "query", None) is not None:
+    if (
+        getattr(obj, "stage3_synthesis", None) is not None
+        or getattr(obj, "query", None) is not None
+    ):
         return "episodic"
     return None

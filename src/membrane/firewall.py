@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import AbstractSet, Any, Literal
 from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
+from typing import Any, Literal
 
 import membrane.config as os_config
 
@@ -169,7 +170,11 @@ class PreFlightContextFirewall:
 
         budget = self.max_tokens - reserved
         middle_budget = budget
-        shares = {t: f for t, f in (tier_shares or {}).items() if not pinned_tiers or t not in pinned_tiers}
+        shares = {
+            t: f
+            for t, f in (tier_shares or {}).items()
+            if not pinned_tiers or t not in pinned_tiers
+        }
         used: dict[int, int] = {}
         procedural_count = 0
         kept_idx: list[int] = []
@@ -191,7 +196,10 @@ class PreFlightContextFirewall:
             return True
 
         for i, (seg_text, tier) in enumerate(sorted_segments):
-            if tier in shares and used.get(tier, 0) + count(seg_text) > shares[tier] * middle_budget:
+            if (
+                tier in shares
+                and used.get(tier, 0) + count(seg_text) > shares[tier] * middle_budget
+            ):
                 deferred.append(i)
                 continue
             _take(i)

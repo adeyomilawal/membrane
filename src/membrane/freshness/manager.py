@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -72,7 +73,7 @@ class FreshnessManager:
         scores = self.score(memories, timestamp_fn=timestamp_fn)
         wfn = weight_fn or self._default_weight
         setter = weight_setter or self._default_set_weight
-        for m, fr in zip(memories, scores):
+        for m, fr in zip(memories, scores, strict=False):
             self._try_setattr(m, "_membrane_freshness_score", fr.freshness_score)
             self._try_setattr(m, "_membrane_is_stale", bool(fr.is_stale))
             # base score is stored on first application so repeated calls do not compound decay
@@ -90,10 +91,9 @@ class FreshnessManager:
 
     @staticmethod
     def _try_setattr(m: Any, name: str, value: Any) -> None:
-        try:
+        # frozen / slotted objects reject new attributes
+        with contextlib.suppress(Exception):
             setattr(m, name, value)
-        except Exception:
-            pass  # frozen / slotted objects reject new attributes
 
     @staticmethod
     def _default_set_weight(m: Any, w: float) -> None:
@@ -112,4 +112,4 @@ class FreshnessManager:
         timestamp_fn: Callable[[Any], float | None] | None = None,
     ) -> list[Any]:
         scores = self.score(memories, timestamp_fn=timestamp_fn)
-        return [m for m, fr in zip(memories, scores) if fr.is_stale]
+        return [m for m, fr in zip(memories, scores, strict=False) if fr.is_stale]

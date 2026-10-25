@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 
 @runtime_checkable
 class StructuredMetricsCallback(Protocol):
-    """Receives structured MetricEvent instances (distinct from membrane.metrics.MetricsCallback)."""
+    """Receives structured MetricEvent instances (distinct from
+    membrane.metrics.MetricsCallback).
+    """
 
     def emit(self, event: MetricEvent) -> None: ...
 

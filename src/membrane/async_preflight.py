@@ -99,7 +99,11 @@ async def run_async_preflight(
         th = threshold if threshold is not None else os_config.get_preflight_token_threshold()
         if count_tokens(raw_middle_text) <= th:
             return None
-        tgt = target_tokens if target_tokens is not None else os_config.get_preflight_target_tokens()
+        tgt = (
+            target_tokens
+            if target_tokens is not None
+            else os_config.get_preflight_target_tokens()
+        )
         compressed = await compress_middle(raw_middle_text, tgt, partial_message)
         if compressed and redis_client:
             await set_preflight_cache(

@@ -29,16 +29,14 @@ def extractive_summary(
 ) -> str:
     ranked = score_sentences(text)
     out: list[str] = []
-    n = 0
     total = 0
-    for sent, _ in ranked:
+    for n, (sent, _) in enumerate(ranked):
         if n >= max_sentences:
             break
         if total + len(sent) > max_chars:
             break
         out.append(sent)
         total += len(sent)
-        n += 1
     return " ".join(out) if out else text[:max_chars]
 
 

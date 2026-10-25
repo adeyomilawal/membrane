@@ -24,7 +24,10 @@ def compute_stress_from_environment(environment_state: Any) -> float | None:
         components.append(min(1.0, lat / 500.0))
     if "cpu_load" in environment_state and environment_state["cpu_load"] is not None:
         components.append(min(1.0, max(0.0, float(environment_state["cpu_load"]))))
-    if "tool_failure_count" in environment_state and environment_state["tool_failure_count"] is not None:
+    if (
+        "tool_failure_count" in environment_state
+        and environment_state["tool_failure_count"] is not None
+    ):
         n = int(environment_state["tool_failure_count"])
         components.append(min(1.0, n / 5.0))
     if "loop_retries" in environment_state and environment_state["loop_retries"] is not None:

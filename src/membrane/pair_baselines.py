@@ -93,7 +93,9 @@ def pack_middle_order(
 
 
 def pad_prefix_to_token_count(prefix: str, target_tokens: int) -> str:
-    """Return a suffix of repeated ``x`` so ``count_tokens(prefix + suffix)`` is at most ``target_tokens``."""
+    """Return a suffix of repeated ``x`` so ``count_tokens(prefix + suffix)`` is at most
+    ``target_tokens``.
+    """
     if count_tokens(prefix) >= target_tokens:
         return ""
     lo, hi = 0, target_tokens * 8
@@ -120,7 +122,9 @@ def tier_vs_fifo_demo_segments(
     middle: list[tuple[str, int]] = []
     for i in range(semantic_lines):
         prefix = f"[Mem:{i + 1}] MARK_SEM_{i} "
-        middle.append((prefix + pad_prefix_to_token_count(prefix, semantic_tokens_each), TIER_SEMANTIC))
+        middle.append(
+            (prefix + pad_prefix_to_token_count(prefix, semantic_tokens_each), TIER_SEMANTIC)
+        )
     for j, mark in enumerate(procedural_markers):
         idx = semantic_lines + j + 1
         middle.append((f"[Mem:{idx}] {mark} yy", TIER_PROCEDURAL))

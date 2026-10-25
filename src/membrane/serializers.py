@@ -7,6 +7,7 @@ collapse newlines so each memory stays one line. Episodic and procedural lines b
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from contextvars import ContextVar
 from datetime import datetime
@@ -69,10 +70,7 @@ class DenseSerializer:
             text = _dense_text(content_only, 200)
             return f"[fact] kind=note | text={text} | conf=1.00"
         obj = getattr(fact, "object", None)
-        if obj is None:
-            obj = getattr(fact, "object_value", "") or ""
-        else:
-            obj = obj or ""
+        obj = getattr(fact, "object_value", "") or "" if obj is None else obj or ""
         confidence = getattr(fact, "confidence", 0.0)
         subj = _dense_text(subject, 200)
         rel = _dense_text(predicate, 200)
@@ -108,7 +106,8 @@ class DenseSerializer:
         steps = getattr(procedure, "steps", []) or []
         text = _procedure_text(procedure)
         if not steps and text:
-            # Plain procedural memories (e.g. KernelMemoryObject tier 1) carry their payload as text.
+            # Plain procedural memories (e.g. KernelMemoryObject tier 1) carry their payload as
+            # text.
             return f"[Mem:{idx}] kind=procedural | text={_dense_text(text, 500)}"
         name = getattr(procedure, "name", "") or "Unknown"
         name_safe = _dense_field(str(name).replace(":", "-"), 80)
@@ -121,16 +120,21 @@ class DenseSerializer:
         steps_str = " > ".join(parts) if parts else "Step 1 (N/A)"
         steps_str = _dense_field(steps_str, 500)
         outcome = "N/A"
-        if parts and hasattr(steps[-1], "expected_outcome") and getattr(steps[-1], "expected_outcome", None):
+        if (
+            parts
+            and hasattr(steps[-1], "expected_outcome")
+            and getattr(steps[-1], "expected_outcome", None)
+        ):
             outcome = _dense_field(steps[-1].expected_outcome, 60)
         else:
             sr = getattr(procedure, "success_rate", None)
             if sr is not None:
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     outcome = f"{float(sr):.0%}"
-                except (TypeError, ValueError):
-                    pass
-        return f"[Mem:{idx}] kind=procedural | name={name_safe} | steps={steps_str} | outcome={outcome}"
+        return (
+            f"[Mem:{idx}] kind=procedural | name={name_safe} | steps={steps_str} "
+            f"| outcome={outcome}"
+        )
 
     @staticmethod
     def format_checked(memory_object: Any, local_index: int | None = None) -> tuple[str, bool]:
@@ -160,20 +164,15 @@ class DenseSerializer:
         subject = getattr(fact, "subject", "") or ""
         predicate = getattr(fact, "predicate", "") or ""
         obj = getattr(fact, "object", None)
-        if obj is None:
-            obj = getattr(fact, "object_value", "") or ""
-        else:
-            obj = obj or ""
+        obj = getattr(fact, "object_value", "") or "" if obj is None else obj or ""
         confidence = getattr(fact, "confidence", None)
         parts = [str(subject), str(predicate), str(obj)]
         sentence = " ".join(p.strip() for p in parts if p and str(p).strip())
         if not sentence:
             return "(No content)"
         if confidence is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 sentence += f" (confidence: {float(confidence):.2f})"
-            except (TypeError, ValueError):
-                pass
         return sentence + "."
 
     @staticmethod

@@ -18,7 +18,9 @@ def _memory_type(value: Any) -> MemoryType:
 
 
 def document_to_memory(doc: Any) -> MemoryItem:
-    """Map a generic CrewAI / dict-like document to :class:`~membrane.memory_protocol.MemoryItem`."""
+    """Map a generic CrewAI / dict-like document to
+    :class:`~membrane.memory_protocol.MemoryItem`.
+    """
     if isinstance(doc, dict):
         return MemoryItem(
             id=str(doc.get("id", "doc")),

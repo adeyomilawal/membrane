@@ -72,8 +72,14 @@ def test_truncated_memories_are_reported():
 
 
 def _mixed():
-    procs = [KernelMemoryObject(payload=f"step {i} " * 15, semantic_tier=1, id=f"p{i}") for i in range(3)]
-    facts = [KernelMemoryObject(payload=f"fact {i} " * 15, semantic_tier=2, id=f"f{i}") for i in range(10)]
+    procs = [
+        KernelMemoryObject(payload=f"step {i} " * 15, semantic_tier=1, id=f"p{i}")
+        for i in range(3)
+    ]
+    facts = [
+        KernelMemoryObject(payload=f"fact {i} " * 15, semantic_tier=2, id=f"f{i}")
+        for i in range(10)
+    ]
     return procs + facts
 
 
@@ -122,8 +128,18 @@ def test_enable_reverses_a_disable():
     pol = PolicyEngine.from_dict(
         {
             "policies": [
-                {"name": "off", "condition": "always", "priority": 2, "actions": [{"disable": ["reranker"]}]},
-                {"name": "on", "condition": "always", "priority": 1, "actions": [{"enable": ["reranker"]}]},
+                {
+                    "name": "off",
+                    "condition": "always",
+                    "priority": 2,
+                    "actions": [{"disable": ["reranker"]}],
+                },
+                {
+                    "name": "on",
+                    "condition": "always",
+                    "priority": 1,
+                    "actions": [{"enable": ["reranker"]}],
+                },
             ]
         }
     )
@@ -156,7 +172,9 @@ def test_policy_budget_never_exceeds_model_cap():
 
 def test_policy_without_condition_is_rejected():
     with pytest.raises(ValueError, match="condition"):
-        PolicyEngine.from_dict({"policies": [{"name": "p", "actions": [{"disable": ["reranker"]}]}]})
+        PolicyEngine.from_dict(
+            {"policies": [{"name": "p", "actions": [{"disable": ["reranker"]}]}]}
+        )
 
 
 def test_unknown_action_is_rejected():

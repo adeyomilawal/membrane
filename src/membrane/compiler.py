@@ -192,18 +192,26 @@ def _emit_compile_metrics(
         logger.warning("metrics_callback failed: %s", exc, exc_info=True)
 
 
-PREFLIGHT_ANALYST_SYSTEM = """You are an Intelligence Analyst. Your task is to compress retrieved long-term memory into a dense summary for the middle "sacrifice zone" of a prompt. Rules:
-- Output ONLY the compressed summary; no preamble, no "Summary:" label.
-- Use triples where possible: (Subject|Predicate|Object|Confidence).
-- Use bracket-dense episodes when relevant: [Mem:N|YYYY-MM-DD]: one-line event.
-- Preserve key entities, dates, and causal links.
-- Stay strictly under the requested token limit (dense, no filler)."""
+PREFLIGHT_ANALYST_SYSTEM = (
+    "You are an Intelligence Analyst. Your task is to compress retrieved long-term memory into a "
+    'dense summary for the middle "sacrifice zone" of a prompt. Rules:\n'
+    "- Output ONLY the compressed summary; no preamble, no \"Summary:\" label.\n"
+    "- Use triples where possible: (Subject|Predicate|Object|Confidence).\n"
+    "- Use bracket-dense episodes when relevant: [Mem:N|YYYY-MM-DD]: one-line event.\n"
+    "- Preserve key entities, dates, and causal links.\n"
+    "- Stay strictly under the requested token limit (dense, no filler)."
+)
 
 MEMORY_PLACEMENT_SYSTEM = "system"
 MEMORY_PLACEMENT_END = "end"
 MEMORY_PLACEMENTS = (MEMORY_PLACEMENT_SYSTEM, MEMORY_PLACEMENT_END)
 
-INTERRUPT_INSTRUCTION = """If a detail is missing from the provided context, do not hallucinate. Output exactly: <SYSTEM_INTERRUPT_FETCH[Your precise query for the missing detail]> so the system can fetch it. Use request_memory_expansion(local_id) for [Mem:N] references when you need full prose; use search_cognitive_memory(query) for new searches."""
+INTERRUPT_INSTRUCTION = (
+    "If a detail is missing from the provided context, do not hallucinate. Output exactly: "
+    "<SYSTEM_INTERRUPT_FETCH[Your precise query for the missing detail]> so the system can "
+    "fetch it. Use request_memory_expansion(local_id) for [Mem:N] references when you need "
+    "full prose; use search_cognitive_memory(query) for new searches."
+)
 
 
 class SecurityFlag(str, Enum):
@@ -805,7 +813,8 @@ class ContextCompiler:
         ranking_weights: Any = None,
         include_ranking_diagnostics: bool | None = None,
     ) -> CompileResult:
-        """Synchronous compile: optional sync ``compress_sync`` for sacrifice zone; optional modules via ``profile``.
+        """Synchronous compile: optional sync ``compress_sync`` for sacrifice zone; optional
+        modules via ``profile``.
 
         Stages follow ``membrane/future.md`` (Compile Pipeline Order): policies →
         classify → freshness → dedup → layout core → reranker → lineage segment

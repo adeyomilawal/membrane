@@ -53,9 +53,9 @@ class CompileMetrics:
         }
 
     def to_json_bytes(self) -> bytes:
-        return json.dumps(self.to_serializable_dict(), separators=(",", ":"), sort_keys=True).encode(
-            "utf-8"
-        )
+        return json.dumps(
+            self.to_serializable_dict(), separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
 
 
 @runtime_checkable
