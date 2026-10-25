@@ -6,7 +6,7 @@ import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +15,13 @@ logger = logging.getLogger(__name__)
 class EnvironmentSnapshot:
     """Diagnostic state captured at memory write time."""
 
-    latency_ms: Optional[float] = None
-    cpu_load: Optional[float] = None
-    tool_failure_count: Optional[int] = None
-    loop_retries: Optional[int] = None
-    timestamp: Optional[str] = None
+    latency_ms: float | None = None
+    cpu_load: float | None = None
+    tool_failure_count: int | None = None
+    loop_retries: int | None = None
+    timestamp: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "latency_ms": self.latency_ms,
             "cpu_load": self.cpu_load,
@@ -31,18 +31,18 @@ class EnvironmentSnapshot:
         }
 
 
-_current_snapshot: ContextVar[Optional[EnvironmentSnapshot]] = ContextVar(
+_current_snapshot: ContextVar[EnvironmentSnapshot | None] = ContextVar(
     "membrane_environment_snapshot",
     default=None,
 )
 
 
 def set_environment_snapshot(
-    latency_ms: Optional[float] = None,
-    cpu_load: Optional[float] = None,
-    tool_failure_count: Optional[int] = None,
-    loop_retries: Optional[int] = None,
-    timestamp: Optional[str] = None,
+    latency_ms: float | None = None,
+    cpu_load: float | None = None,
+    tool_failure_count: int | None = None,
+    loop_retries: int | None = None,
+    timestamp: str | None = None,
 ) -> None:
     """Set request-scoped environment state before creating episodic writes."""
     ts = timestamp or datetime.now(timezone.utc).isoformat()
@@ -61,7 +61,7 @@ def set_environment_snapshot_from_state(state: EnvironmentSnapshot) -> None:
     _current_snapshot.set(state)
 
 
-def get_current_environment_state() -> Optional[EnvironmentSnapshot]:
+def get_current_environment_state() -> EnvironmentSnapshot | None:
     """Return current request-scoped snapshot, or None."""
     return _current_snapshot.get()
 
@@ -74,7 +74,7 @@ def clear_environment_snapshot() -> None:
         pass
 
 
-def capture_cpu_load() -> Optional[float]:
+def capture_cpu_load() -> float | None:
     """Return current CPU load 0.0–1.0, or None if unavailable."""
     try:
         import psutil
@@ -85,11 +85,11 @@ def capture_cpu_load() -> Optional[float]:
         return None
 
 
-def snapshot_to_stress_inputs(snapshot: Optional[EnvironmentSnapshot]) -> Optional[Dict[str, Any]]:
+def snapshot_to_stress_inputs(snapshot: EnvironmentSnapshot | None) -> dict[str, Any] | None:
     """Convert snapshot to dict for compute_stress_from_environment."""
     if snapshot is None:
         return None
-    d: Dict[str, Any] = {}
+    d: dict[str, Any] = {}
     if snapshot.latency_ms is not None:
         d["latency_ms"] = snapshot.latency_ms
     if snapshot.cpu_load is not None:

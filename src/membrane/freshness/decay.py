@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import List, Protocol, Tuple
+from typing import Protocol
 
 
 class DecayFunction(Protocol):
@@ -27,7 +27,7 @@ class LinearDecay:
 
 
 class StepDecay:
-    def __init__(self, thresholds: List[Tuple[float, float]]) -> None:
+    def __init__(self, thresholds: list[tuple[float, float]]) -> None:
         self._thresholds = sorted(thresholds, key=lambda x: x[0])
 
     def compute(self, age_seconds: float) -> float:

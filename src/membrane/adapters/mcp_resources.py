@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from membrane.profile import PRESET_NAMES
 
@@ -15,7 +15,7 @@ def list_profile_resource_text() -> str:
     return json.dumps({"presets": list(_PROFILE_NAMES)}, indent=2)
 
 
-def last_compile_resource_text(last: Optional[Any]) -> str:
+def last_compile_resource_text(last: Any | None) -> str:
     if last is None:
         return json.dumps({"error": "no_compilation_yet"})
     if hasattr(last, "to_debug_dict"):
@@ -23,11 +23,11 @@ def last_compile_resource_text(last: Optional[Any]) -> str:
     return json.dumps({"raw": str(last)})
 
 
-def metrics_resource_text(snapshot: Optional[Dict[str, Any]]) -> str:
+def metrics_resource_text(snapshot: dict[str, Any] | None) -> str:
     return json.dumps(snapshot or {"session": "membrane-mcp", "metrics": "none"}, indent=2)
 
 
-def resource_uris() -> List[str]:
+def resource_uris() -> list[str]:
     return [
         "membrane://profiles",
         "membrane://last_compile",

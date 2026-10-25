@@ -6,7 +6,7 @@ every turn, so anything placed after them cannot be served from cache.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from membrane import ContextCompiler, MemoryItem
 from membrane.firewall import count_tokens
@@ -15,7 +15,7 @@ MODEL = "openai/gpt-4o"
 CORE = "\n".join(
     f"Rule {i}: answer precisely, cite [Mem:N] when you rely on memory." for i in range(60)
 )
-HISTORY: List[Dict[str, Any]] = [
+HISTORY: list[dict[str, Any]] = [
     {"role": "user", "content": "Hi, I am planning a trip to Lisbon."},
     {"role": "assistant", "content": "Great choice. What dates are you considering?"},
 ]
@@ -33,7 +33,7 @@ MEMS_TURN2 = [
 ]
 
 
-def _serialize(messages: List[Dict[str, Any]]) -> str:
+def _serialize(messages: list[dict[str, Any]]) -> str:
     return "".join(f"<{m['role']}>{m['content']}</{m['role']}>" for m in messages)
 
 
@@ -155,7 +155,7 @@ def test_invalid_memory_placement_rejected():
 
 def _long_turns(n_exchanges: int, **compiler_kw: Any):
     cc = ContextCompiler(max_tokens=100_000, model_id=MODEL, core_content=CORE, **compiler_kw)
-    history: List[Dict[str, Any]] = []
+    history: list[dict[str, Any]] = []
     for i in range(n_exchanges):
         history.append({"role": "user", "content": f"Question {i}: what about district {i}?"})
         history.append({"role": "assistant", "content": f"District {i} is known for " + "tiles " * 30})

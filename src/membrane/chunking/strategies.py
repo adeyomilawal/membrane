@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 from membrane.chunking.boundaries import (
     detect_headings,
@@ -13,7 +13,7 @@ from membrane.chunking.boundaries import (
 
 
 class Chunk:
-    __slots__ = ("content", "token_count", "start_char", "end_char", "metadata")
+    __slots__ = ("content", "end_char", "metadata", "start_char", "token_count")
 
     def __init__(
         self,
@@ -21,7 +21,7 @@ class Chunk:
         token_count: int,
         start_char: int,
         end_char: int,
-        metadata: Optional[dict] = None,
+        metadata: dict | None = None,
     ) -> None:
         self.content = content
         self.token_count = token_count
@@ -38,14 +38,14 @@ def _default_tok() -> Callable[[str], int]:
 
 def _pack_units(
     text: str,
-    spans: List[tuple],
+    spans: list[tuple],
     max_tokens: int,
     tok: Callable[[str], int],
     label: str,
-) -> List[Chunk]:
-    chunks: List[Chunk] = []
-    buf_parts: List[str] = []
-    buf_start: Optional[int] = None
+) -> list[Chunk]:
+    chunks: list[Chunk] = []
+    buf_parts: list[str] = []
+    buf_start: int | None = None
     buf_end = 0
     buf_tokens = 0
 
@@ -92,8 +92,8 @@ class SentenceStrategy:
         *,
         max_tokens: int,
         overlap_tokens: int = 0,
-        tokenizer: Optional[Callable[[str], int]] = None,
-    ) -> List[Chunk]:
+        tokenizer: Callable[[str], int] | None = None,
+    ) -> list[Chunk]:
         tok = tokenizer or _default_tok()
         spans = detect_sentences(text)
         if not spans:
@@ -108,8 +108,8 @@ class ParagraphStrategy:
         *,
         max_tokens: int,
         overlap_tokens: int = 0,
-        tokenizer: Optional[Callable[[str], int]] = None,
-    ) -> List[Chunk]:
+        tokenizer: Callable[[str], int] | None = None,
+    ) -> list[Chunk]:
         tok = tokenizer or _default_tok()
         spans = detect_paragraphs(text)
         if not spans:
@@ -124,10 +124,10 @@ class FixedStrategy:
         *,
         max_tokens: int,
         overlap_tokens: int = 0,
-        tokenizer: Optional[Callable[[str], int]] = None,
-    ) -> List[Chunk]:
+        tokenizer: Callable[[str], int] | None = None,
+    ) -> list[Chunk]:
         tok = tokenizer or _default_tok()
-        chunks: List[Chunk] = []
+        chunks: list[Chunk] = []
         if max_tokens <= 0:
             return chunks
         ov_tokens = max(0, min(overlap_tokens, max_tokens - 1))
@@ -172,8 +172,8 @@ class RecursiveStrategy:
         *,
         max_tokens: int,
         overlap_tokens: int = 0,
-        tokenizer: Optional[Callable[[str], int]] = None,
-    ) -> List[Chunk]:
+        tokenizer: Callable[[str], int] | None = None,
+    ) -> list[Chunk]:
         tok = tokenizer or _default_tok()
         hd = detect_headings(text)
         if not hd:
@@ -183,7 +183,7 @@ class RecursiveStrategy:
                 overlap_tokens=overlap_tokens,
                 tokenizer=tok,
             )
-        chunks: List[Chunk] = []
+        chunks: list[Chunk] = []
         if hd[0][0] > 0 and text[: hd[0][0]].strip():
             # text before the first heading
             for c in ParagraphStrategy().chunk(
@@ -212,7 +212,7 @@ class RecursiveStrategy:
 
 
 class SemanticStrategy:
-    def __init__(self, embed_fn: Optional[Callable[[str], List[float]]] = None) -> None:
+    def __init__(self, embed_fn: Callable[[str], list[float]] | None = None) -> None:
         self._embed_fn = embed_fn
 
     def chunk(
@@ -221,8 +221,8 @@ class SemanticStrategy:
         *,
         max_tokens: int,
         overlap_tokens: int = 0,
-        tokenizer: Optional[Callable[[str], int]] = None,
-    ) -> List[Chunk]:
+        tokenizer: Callable[[str], int] | None = None,
+    ) -> list[Chunk]:
         tok = tokenizer or _default_tok()
         boundaries = [0] + detect_topic_shifts(text, self._embed_fn) + [len(text)]
         spans = [(boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)]

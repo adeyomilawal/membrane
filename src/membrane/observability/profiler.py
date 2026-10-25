@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List
+from collections.abc import Iterator
 
 
 @dataclass
@@ -13,17 +13,17 @@ class CompileProfile:
     """Wall time and per-stage breakdown for one compile."""
 
     total_ms: float
-    stages: Dict[str, float] = field(default_factory=dict)
+    stages: dict[str, float] = field(default_factory=dict)
 
     @property
-    def percentage(self) -> Dict[str, float]:
+    def percentage(self) -> dict[str, float]:
         if self.total_ms <= 0:
             return {k: 0.0 for k in self.stages}
         return {k: (v / self.total_ms) * 100.0 for k, v in self.stages.items()}
 
     def to_waterfall(self) -> str:
         """ASCII bar chart for terminal debugging."""
-        lines: List[str] = []
+        lines: list[str] = []
         total = self.total_ms or 1.0
         for name, ms in sorted(self.stages.items(), key=lambda x: -x[1]):
             pct = (ms / total) * 100.0
@@ -33,7 +33,7 @@ class CompileProfile:
         lines.append(f"{'TOTAL':24s} {self.total_ms:8.2f} ms")
         return "\n".join(lines)
 
-    def to_dict(self) -> Dict[str, float]:
+    def to_dict(self) -> dict[str, float]:
         return {"total_ms": self.total_ms, **self.stages}
 
 
@@ -41,7 +41,7 @@ class LatencyProfiler:
     """Records time spent in named pipeline stages."""
 
     def __init__(self) -> None:
-        self._stage_ms: Dict[str, float] = {}
+        self._stage_ms: dict[str, float] = {}
         self._t0: float = 0.0
 
     def start_total(self) -> None:

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import re
-from typing import Callable, List, Optional, Sequence, Tuple
+from collections.abc import Callable, Sequence
 
 
-def score_sentences(text: str) -> List[Tuple[str, float]]:
+def score_sentences(text: str) -> list[tuple[str, float]]:
     """Very simple TF-like scoring: longer sentences with digits/entities score higher."""
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
-    scored: List[Tuple[str, float]] = []
+    scored: list[tuple[str, float]] = []
     for p in parts:
         p = p.strip()
         if not p:
@@ -28,7 +28,7 @@ def extractive_summary(
     max_chars: int = 1200,
 ) -> str:
     ranked = score_sentences(text)
-    out: List[str] = []
+    out: list[str] = []
     n = 0
     total = 0
     for sent, _ in ranked:
@@ -43,8 +43,8 @@ def extractive_summary(
 
 
 def summarize_turns(
-    turns: Sequence[Tuple[str, str]],
-    summarization_fn: Optional[Callable[[str], str]],
+    turns: Sequence[tuple[str, str]],
+    summarization_fn: Callable[[str], str] | None,
 ) -> str:
     blob = "\n".join(f"{r}: {c}" for r, c in turns)
     if summarization_fn is not None:

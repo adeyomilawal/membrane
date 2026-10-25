@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any
+from collections.abc import Awaitable, Callable
 
 from membrane import config as os_config
 from membrane.firewall import count_tokens
@@ -36,7 +37,7 @@ async def get_preflight_cache(
     redis_client: Any,
     conversation_id: str,
     user_msg: str,
-) -> Optional[str]:
+) -> str | None:
     if not redis_client or not conversation_id:
         return None
     try:
@@ -54,7 +55,7 @@ async def set_preflight_cache(
     conversation_id: str,
     user_msg: str,
     compressed: str,
-    ttl_seconds: Optional[int] = None,
+    ttl_seconds: int | None = None,
 ) -> None:
     if not redis_client or not conversation_id or not compressed:
         return
@@ -78,9 +79,9 @@ async def run_async_preflight(
     redis_client: Any,
     retrieve_raw_middle: RetrieveAndSerialize,
     compress_middle: CompressMiddle,
-    threshold: Optional[int] = None,
-    target_tokens: Optional[int] = None,
-) -> Optional[str]:
+    threshold: int | None = None,
+    target_tokens: int | None = None,
+) -> str | None:
     """
     Build raw middle from retrieval, compress if over threshold, store in Redis.
 

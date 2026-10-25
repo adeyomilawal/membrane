@@ -9,7 +9,8 @@ chain or raise :class:`membrane.exceptions.MemoryCollisionError` if both are det
 
 from __future__ import annotations
 
-from typing import Any, Literal, Sequence, cast
+from typing import Any, Literal, cast
+from collections.abc import Sequence
 
 from membrane.exceptions import MemoryCollisionError
 from membrane.memory_protocol import MemoryItem

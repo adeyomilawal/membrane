@@ -6,31 +6,31 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
-_capabilities_map: Optional[Dict[str, List[str]]] = None
-_context_caps_map: Optional[Dict[str, int]] = None
+_capabilities_map: dict[str, list[str]] | None = None
+_context_caps_map: dict[str, int] | None = None
 
 
-def _default_maps() -> Tuple[Dict[str, List[str]], Dict[str, int]]:
+def _default_maps() -> tuple[dict[str, list[str]], dict[str, int]]:
     return (
         {"_default": ["streaming_interrupt", "no_caching"]},
         {"_default": 8192},
     )
 
 
-def _load_json_from_path(path: Path) -> Optional[dict]:
+def _load_json_from_path(path: Path) -> dict | None:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError, TypeError) as e:
         logger.error("Invalid capability map at %s: %s", path, e)
         return None
 
 
-def _load_bundled() -> Optional[dict]:
+def _load_bundled() -> dict | None:
     """Load JSON shipped beside this module (included in the wheel)."""
     path = Path(__file__).resolve().parent / "llm_capabilities.json"
     try:
@@ -41,7 +41,7 @@ def _load_bundled() -> Optional[dict]:
         return None
 
 
-def _load_once() -> Tuple[Dict[str, List[str]], Dict[str, int]]:
+def _load_once() -> tuple[dict[str, list[str]], dict[str, int]]:
     global _capabilities_map, _context_caps_map
     if _capabilities_map is not None and _context_caps_map is not None:
         return _capabilities_map, _context_caps_map
@@ -63,7 +63,7 @@ def _load_once() -> Tuple[Dict[str, List[str]], Dict[str, int]]:
     caps = data.get("capabilities")
     if not isinstance(caps, dict):
         caps = {"_default": ["streaming_interrupt", "no_caching"]}
-    cap_map: Dict[str, List[str]] = {}
+    cap_map: dict[str, list[str]] = {}
     for k, v in caps.items():
         if isinstance(v, list):
             cap_map[k] = [str(x) for x in v]
@@ -73,7 +73,7 @@ def _load_once() -> Tuple[Dict[str, List[str]], Dict[str, int]]:
     caps_int = data.get("context_caps")
     if not isinstance(caps_int, dict):
         caps_int = {"_default": 8192}
-    ctx_map: Dict[str, int] = {}
+    ctx_map: dict[str, int] = {}
     for k, v in caps_int.items():
         try:
             ctx_map[k] = int(v)
@@ -103,7 +103,7 @@ def _normalize(model_id: str) -> str:
     return _DATE_SUFFIX.sub("", model_id.strip().lower().replace(".", "-"))
 
 
-def _resolve_key(model_id: Optional[str], keys: Sequence[str]) -> Optional[str]:
+def _resolve_key(model_id: str | None, keys: Sequence[str]) -> str | None:
     """Map a model id to a registry key: exact, normalized, then longest prefix.
 
     Matching ignores the provider prefix when ``model_id`` has none, so ``gpt-4o``
@@ -115,7 +115,7 @@ def _resolve_key(model_id: Optional[str], keys: Sequence[str]) -> Optional[str]:
         return model_id
     target = _normalize(model_id)
     bare_target = target.split("/", 1)[-1]
-    best: Optional[str] = None
+    best: str | None = None
     best_len = 0
     for key in keys:
         if key == "_default":
@@ -136,7 +136,7 @@ def _resolve_key(model_id: Optional[str], keys: Sequence[str]) -> Optional[str]:
     return best
 
 
-def get_capabilities_for_model(model_id: Optional[str]) -> List[str]:
+def get_capabilities_for_model(model_id: str | None) -> list[str]:
     cap_map, _ = _load_once()
     key = _resolve_key(model_id, list(cap_map))
     if key is not None:
@@ -144,14 +144,14 @@ def get_capabilities_for_model(model_id: Optional[str]) -> List[str]:
     return list(cap_map.get("_default", ["streaming_interrupt", "no_caching"]))
 
 
-def lookup_context_cap(model_id: Optional[str]) -> Optional[int]:
+def lookup_context_cap(model_id: str | None) -> int | None:
     """Context cap for a known model, or ``None`` when the model is not in the map."""
     _, ctx_map = _load_once()
     key = _resolve_key(model_id, list(ctx_map))
     return ctx_map[key] if key is not None else None
 
 
-def get_context_cap_for_model(model_id: Optional[str]) -> int:
+def get_context_cap_for_model(model_id: str | None) -> int:
     cap = lookup_context_cap(model_id)
     if cap is not None:
         return cap
@@ -159,19 +159,19 @@ def get_context_cap_for_model(model_id: Optional[str]) -> int:
     return ctx_map.get("_default", 8192)
 
 
-def has_prompt_caching(model_id: Optional[str]) -> bool:
+def has_prompt_caching(model_id: str | None) -> bool:
     return "prompt_caching" in get_capabilities_for_model(model_id)
 
 
-def has_streaming_interrupt(model_id: Optional[str]) -> bool:
+def has_streaming_interrupt(model_id: str | None) -> bool:
     return "streaming_interrupt" in get_capabilities_for_model(model_id)
 
 
-def get_full_capability_map() -> Dict[str, List[str]]:
+def get_full_capability_map() -> dict[str, list[str]]:
     cap_map, _ = _load_once()
     return {k: list(v) for k, v in cap_map.items()}
 
 
-def get_full_context_caps() -> Dict[str, int]:
+def get_full_context_caps() -> dict[str, int]:
     _, ctx_map = _load_once()
     return dict(ctx_map)

@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import re
-from typing import Callable, List, Optional, Tuple, cast
+from typing import cast
+from collections.abc import Callable
 
 
-def detect_sentences(text: str) -> List[Tuple[int, int]]:
+def detect_sentences(text: str) -> list[tuple[int, int]]:
     """Return (start, end) spans for sentence-like segments."""
     if not text.strip():
         return []
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
-    out: List[Tuple[int, int]] = []
+    out: list[tuple[int, int]] = []
     pos = 0
     for p in parts:
         if not p:
@@ -25,9 +26,9 @@ def detect_sentences(text: str) -> List[Tuple[int, int]]:
     return out if out else [(0, len(text))]
 
 
-def detect_paragraphs(text: str) -> List[Tuple[int, int]]:
+def detect_paragraphs(text: str) -> list[tuple[int, int]]:
     blocks = text.split("\n\n")
-    out: List[Tuple[int, int]] = []
+    out: list[tuple[int, int]] = []
     pos = 0
     for b in blocks:
         if not b:
@@ -42,9 +43,9 @@ def detect_paragraphs(text: str) -> List[Tuple[int, int]]:
     return out if out else [(0, len(text))]
 
 
-def detect_headings(text: str) -> List[Tuple[int, int, int]]:
+def detect_headings(text: str) -> list[tuple[int, int, int]]:
     """Markdown headings: (start, end, level)."""
-    out: List[Tuple[int, int, int]] = []
+    out: list[tuple[int, int, int]] = []
     for m in re.finditer(r"^(#{1,6})\s+(.+)$", text, re.MULTILINE):
         level = len(m.group(1))
         out.append((m.start(), m.end(), level))
@@ -53,9 +54,9 @@ def detect_headings(text: str) -> List[Tuple[int, int, int]]:
 
 def detect_topic_shifts(
     text: str,
-    embed_fn: Optional[Callable[[str], List[float]]] = None,
+    embed_fn: Callable[[str], list[float]] | None = None,
     threshold: float = 0.25,
-) -> List[int]:
+) -> list[int]:
     """
     Return character indices where topic boundaries are suggested.
 
@@ -67,12 +68,12 @@ def detect_topic_shifts(
     sents = detect_sentences(text)
     if len(sents) < 2:
         return []
-    embeddings: List[List[float]] = []
+    embeddings: list[list[float]] = []
     for start, end in sents:
         chunk = text[start:end]
         vec = embed_fn(chunk)
-        embeddings.append(cast(List[float], vec))
-    boundaries: List[int] = []
+        embeddings.append(cast(list[float], vec))
+    boundaries: list[int] = []
     for i in range(1, len(embeddings)):
         d = _cosine_dist(embeddings[i - 1], embeddings[i])
         if d > threshold:
@@ -80,7 +81,7 @@ def detect_topic_shifts(
     return boundaries
 
 
-def _cosine_dist(a: List[float], b: List[float]) -> float:
+def _cosine_dist(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     na = sum(x * x for x in a) ** 0.5
     nb = sum(x * x for x in b) ** 0.5

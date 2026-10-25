@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List, TypeVar
+from typing import Any, TypeVar
 
 T = TypeVar("T", bound="MembraneProfile")
 
@@ -31,7 +31,7 @@ class MembraneProfile:
     assertions: Any = None
     recorder: Any = None
     tokenizer_registry: Any = None
-    trace_exporters: List[Any] = field(default_factory=list)
+    trace_exporters: list[Any] = field(default_factory=list)
     enable_lineage: bool = False
     enable_profiler: bool = False
     lineage_tracker: Any = None
@@ -123,7 +123,7 @@ class MembraneProfile:
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> MembraneProfile:
+    def from_dict(cls, data: dict[str, Any]) -> MembraneProfile:
         """Build profile from a plain dict (e.g. JSON)."""
         base = cls.minimal()
         known = {f.name for f in fields(cls)}

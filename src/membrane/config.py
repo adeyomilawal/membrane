@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -137,13 +136,13 @@ def get_ref_map_cache_ttl_seconds() -> int:
     )
 
 
-def get_default_redis_url() -> Optional[str]:
+def get_default_redis_url() -> str | None:
     """Optional default Redis URL for ref_map when not passed explicitly."""
     url = os.environ.get("MEMBRANE_REDIS_URL") or os.environ.get("MEMORY_OS_KERNEL_REDIS_URL") or os.environ.get("REDIS_URL")
     return url.strip() if url else None
 
 
-def get_memory_text_max_chars() -> Optional[int]:
+def get_memory_text_max_chars() -> int | None:
     """``MEMBRANE_MEMORY_TEXT_MAX_CHARS``: cap on each memory's text in the prompt.
 
     Unset keeps the built-in limits (200 chars for facts, 280 for episodes, 500 for
@@ -154,7 +153,7 @@ def get_memory_text_max_chars() -> Optional[int]:
     return max(0, _int_env("MEMBRANE_MEMORY_TEXT_MAX_CHARS", 0))
 
 
-def get_llm_capability_map_path() -> Optional[str]:
+def get_llm_capability_map_path() -> str | None:
     """Override path to llm_capabilities.json; None = bundled package data."""
     path = os.environ.get("LLM_CAPABILITY_MAP_PATH")
     return path.strip() if path else None

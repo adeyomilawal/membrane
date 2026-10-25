@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from membrane.provider_registry import has_prompt_caching
 
@@ -21,7 +21,7 @@ class CacheableBlock:
 
 
 def make_cacheable_block(
-    model_id: Optional[str],
+    model_id: str | None,
     cacheable_prefix: str,
     dynamic_tail: str,
 ) -> CacheableBlock:
@@ -38,10 +38,10 @@ def make_cacheable_block(
 
 
 def build_system_messages(
-    model_id: Optional[str],
+    model_id: str | None,
     cacheable_prefix: str,
     dynamic_tail: str,
-) -> Tuple[List[Dict[str, Any]], bool]:
+) -> tuple[list[dict[str, Any]], bool]:
     """
     Build system message list with cacheable content first (prefix then tail).
 
@@ -59,7 +59,7 @@ def build_system_messages(
         and cacheable_prefix.strip()
     )
 
-    system_msg: Dict[str, Any] = {
+    system_msg: dict[str, Any] = {
         "role": "system",
         "content": full_content,
     }
@@ -74,13 +74,13 @@ def assemble_system_content(prefix: str, tail: str) -> str:
     return prefix.rstrip() + "\n\n" + tail.lstrip()
 
 
-def anthropic_system_blocks(cacheable_prefix: str, dynamic_tail: str) -> List[Dict[str, Any]]:
+def anthropic_system_blocks(cacheable_prefix: str, dynamic_tail: str) -> list[dict[str, Any]]:
     """
     Anthropic Messages API: system as list of blocks; first block may use cache_control.
 
     Per Anthropic docs: cache_control: {"type": "ephemeral"} on the block to cache.
     """
-    blocks: List[Dict[str, Any]] = []
+    blocks: list[dict[str, Any]] = []
 
     if cacheable_prefix.strip():
         blocks.append({
@@ -98,7 +98,7 @@ def anthropic_system_blocks(cacheable_prefix: str, dynamic_tail: str) -> List[Di
     return blocks if blocks else [{"type": "text", "text": ""}]
 
 
-def is_anthropic_model(model_id: Optional[str]) -> bool:
+def is_anthropic_model(model_id: str | None) -> bool:
     if not model_id:
         return False
     return str(model_id).strip().lower().startswith("anthropic/")

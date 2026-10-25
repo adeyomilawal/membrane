@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, cast
+from typing import Any, cast
 
 import tiktoken
 
@@ -16,10 +16,10 @@ class TiktokenAdapter:
     def name(self) -> str:
         return f"tiktoken:{self._name}"
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         return self._enc.encode(text)
 
-    def decode(self, tokens: List[int]) -> str:
+    def decode(self, tokens: list[int]) -> str:
         return self._enc.decode(tokens)
 
     def count(self, text: str) -> int:
@@ -42,10 +42,10 @@ class SentencePieceAdapter:
     def name(self) -> str:
         return f"sentencepiece:{self._model_path}"
 
-    def encode(self, text: str) -> List[int]:
-        return cast(List[int], self._sp.encode_as_ids(text))
+    def encode(self, text: str) -> list[int]:
+        return cast(list[int], self._sp.encode_as_ids(text))
 
-    def decode(self, tokens: List[int]) -> str:
+    def decode(self, tokens: list[int]) -> str:
         return cast(str, self._sp.decode_ids(tokens))
 
     def count(self, text: str) -> int:
@@ -65,10 +65,10 @@ class HuggingFaceAdapter:
     def name(self) -> str:
         return f"hf:{self._model_id}"
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         return self._tok.encode(text, add_special_tokens=False)
 
-    def decode(self, tokens: List[int]) -> str:
+    def decode(self, tokens: list[int]) -> str:
         return self._tok.decode(tokens, skip_special_tokens=True)
 
     def count(self, text: str) -> int:
@@ -85,11 +85,11 @@ class EstimationAdapter:
     def name(self) -> str:
         return "estimation"
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         n = max(1, int(len(text) / self._cpt))
         return list(range(n))
 
-    def decode(self, tokens: List[int]) -> str:
+    def decode(self, tokens: list[int]) -> str:
         return ""
 
     def count(self, text: str) -> int:

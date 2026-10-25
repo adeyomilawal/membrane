@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Optional, Tuple
+from typing import Any
 
 INTERRUPT_TAG_START = "<SYSTEM_INTERRUPT_FETCH["
 INTERRUPT_TAG_END = "]>"
@@ -14,7 +14,7 @@ _INTERRUPT_PATTERN = re.compile(
 )
 
 
-def parse_interrupt(text: Any) -> Optional[Tuple[str, str, str]]:
+def parse_interrupt(text: Any) -> tuple[str, str, str] | None:
     """
     Scan text for the first occurrence of <SYSTEM_INTERRUPT_FETCH[Query]>.
 

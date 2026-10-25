@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from membrane import config as os_config
 
 logger = logging.getLogger(__name__)
 
 
-def compute_stress_from_environment(environment_state: Any) -> Optional[float]:
+def compute_stress_from_environment(environment_state: Any) -> float | None:
     """
     Compute scalar stress 0.0–1.0 from environment_state for somatic filtering.
 
@@ -35,7 +35,7 @@ def compute_stress_from_environment(environment_state: Any) -> Optional[float]:
     return min(1.0, sum(components) / len(components))
 
 
-async def get_recent_stress_for_user(redis_client: Optional[Any], user_id: str) -> Optional[float]:
+async def get_recent_stress_for_user(redis_client: Any | None, user_id: str) -> float | None:
     """Read last-written stress for user from Redis."""
     if not redis_client or not user_id:
         return None
@@ -52,7 +52,7 @@ async def get_recent_stress_for_user(redis_client: Optional[Any], user_id: str) 
 
 
 async def set_recent_stress_for_user(
-    redis_client: Optional[Any],
+    redis_client: Any | None,
     user_id: str,
     stress: float,
 ) -> None:

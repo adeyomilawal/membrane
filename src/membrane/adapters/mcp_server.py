@@ -21,7 +21,8 @@ import asyncio
 import inspect
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Union
+from collections.abc import Awaitable, Callable, Sequence
 
 from membrane.profile import PRESET_NAMES, MembraneProfile
 
@@ -76,9 +77,9 @@ class MembraneMCPServer:
         self,
         compiler: Any,
         *,
-        profile: Optional[Any] = None,
-        memory_provider: Optional[MemoryProvider] = None,
-        conversation_manager: Optional["ConversationManager"] = None,
+        profile: Any | None = None,
+        memory_provider: MemoryProvider | None = None,
+        conversation_manager: ConversationManager | None = None,
         enable_conversation_tool: bool = True,
         host: str = "localhost",
         port: int = 3100,
@@ -87,14 +88,14 @@ class MembraneMCPServer:
         self._default_profile = profile
         self._memory_provider = memory_provider
         self._conversation_manager = conversation_manager
-        self._lazy_conversation_manager: Optional[Any] = None
+        self._lazy_conversation_manager: Any | None = None
         self._enable_conversation_tool = enable_conversation_tool
         self.host = host
         self.port = port
-        self._last_result: Optional[Any] = None
-        self._metrics_snapshot: Dict[str, Any] = {}
+        self._last_result: Any | None = None
+        self._metrics_snapshot: dict[str, Any] = {}
 
-    def _pick_profile(self, arguments: Dict[str, Any]) -> tuple:
+    def _pick_profile(self, arguments: dict[str, Any]) -> tuple:
         """Per-call ``profile`` wins over the server default; returns ``(profile, name_used)``."""
         if arguments.get("profile"):
             name = str(arguments["profile"])
@@ -120,9 +121,9 @@ class MembraneMCPServer:
             self._lazy_conversation_manager = ConversationManager(self._compiler)
         return self._lazy_conversation_manager
 
-    def as_tool_definitions(self) -> List[Dict[str, Any]]:
+    def as_tool_definitions(self) -> list[dict[str, Any]]:
         """JSON-schema style tool definitions for hosts that register tools manually."""
-        tools: List[Dict[str, Any]] = [
+        tools: list[dict[str, Any]] = [
             {
                 "name": "membrane_compile",
                 "description": (
@@ -184,7 +185,7 @@ class MembraneMCPServer:
             )
         return tools
 
-    async def _fetch_memories(self, uris: Sequence[str]) -> List[Any]:
+    async def _fetch_memories(self, uris: Sequence[str]) -> list[Any]:
         if not uris:
             return []
         if self._memory_provider is None:
@@ -197,7 +198,7 @@ class MembraneMCPServer:
         out = self._memory_provider(list(uris))
         return list(await _maybe_await(out))
 
-    async def _compile_tool(self, arguments: Dict[str, Any]) -> str:
+    async def _compile_tool(self, arguments: dict[str, Any]) -> str:
         query = str(arguments.get("query", ""))
         uris = arguments.get("memory_uris") or []
         model = str(arguments.get("model", "gpt-4o"))
@@ -239,7 +240,7 @@ class MembraneMCPServer:
         )
         return json.dumps(payload, default=str, indent=2)
 
-    async def _compile_conversation_tool(self, arguments: Dict[str, Any]) -> str:
+    async def _compile_conversation_tool(self, arguments: dict[str, Any]) -> str:
         user_message = str(arguments.get("user_message", ""))
         uris = arguments.get("memory_uris") or []
         model = str(arguments.get("model", "gpt-4o"))
@@ -292,7 +293,7 @@ class MembraneMCPServer:
         parent = self
 
         @server.list_tools()
-        async def _list_tools() -> List[types.Tool]:
+        async def _list_tools() -> list[types.Tool]:
             defs = parent.as_tool_definitions()
             return [
                 types.Tool(
@@ -304,7 +305,7 @@ class MembraneMCPServer:
             ]
 
         @server.call_tool()
-        async def _call_tool(name: str, arguments: dict) -> List[types.TextContent]:
+        async def _call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             if name == "membrane_compile":
                 text = await parent._compile_tool(arguments or {})
                 return [types.TextContent(type="text", text=text)]
@@ -319,7 +320,7 @@ class MembraneMCPServer:
             raise ValueError(f"Unknown tool: {name}")
 
         @server.list_resources()
-        async def _list_resources() -> List[types.Resource]:
+        async def _list_resources() -> list[types.Resource]:
             return [
                 types.Resource(
                     uri="membrane://profiles",
@@ -419,7 +420,7 @@ class MembraneMCPServer:
             async with sse.connect_sse(
                 request.scope,
                 request.receive,
-                request._send,  # noqa: SLF001 — MCP SDK examples use this Starlette hook
+                request._send,
             ) as streams:
                 await mcp_server.run(streams[0], streams[1], init_opts)
             return Response()

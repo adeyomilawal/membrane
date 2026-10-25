@@ -7,7 +7,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +27,12 @@ class CompileMetrics:
     ref_map_size: int
     cache_hit: bool
     is_anonymous: bool
-    model_id: Optional[str]
-    user_id: Optional[str]
-    conversation_id: Optional[str]
-    extra: Dict[str, Any] = field(default_factory=dict)
+    model_id: str | None
+    user_id: str | None
+    conversation_id: str | None
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_serializable_dict(self) -> Dict[str, Any]:
+    def to_serializable_dict(self) -> dict[str, Any]:
         """JSON-friendly dict for metrics export (extra must be JSON-serializable)."""
         return {
             "compile_id": self.compile_id,
@@ -73,7 +73,7 @@ class NoOpMetricsCallback:
 class LoggingMetricsCallback:
     """Emit one INFO log line per compile with key numeric fields."""
 
-    def __init__(self, log: Optional[logging.Logger] = None) -> None:
+    def __init__(self, log: logging.Logger | None = None) -> None:
         self._log = log or logger
 
     def on_compile(self, metrics: CompileMetrics) -> None:
@@ -102,12 +102,12 @@ def build_compile_metrics(
     ref_map_size: int,
     cache_hit: bool,
     is_anonymous: bool,
-    model_id: Optional[str],
-    user_id: Optional[str],
-    conversation_id: Optional[str],
-    extra: Optional[Dict[str, Any]] = None,
-    compile_id: Optional[str] = None,
-    timestamp: Optional[float] = None,
+    model_id: str | None,
+    user_id: str | None,
+    conversation_id: str | None,
+    extra: dict[str, Any] | None = None,
+    compile_id: str | None = None,
+    timestamp: float | None = None,
 ) -> CompileMetrics:
     return CompileMetrics(
         compile_id=compile_id or new_compile_id(),

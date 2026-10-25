@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import fnmatch
-from typing import List, Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from membrane.firewall import count_tokens
 
 
 @runtime_checkable
 class TokenizerAdapter(Protocol):
-    def encode(self, text: str) -> List[int]: ...
+    def encode(self, text: str) -> list[int]: ...
 
-    def decode(self, tokens: List[int]) -> str: ...
+    def decode(self, tokens: list[int]) -> str: ...
 
     def count(self, text: str) -> int: ...
 
@@ -21,14 +21,14 @@ class TokenizerAdapter(Protocol):
 
 
 class TokenizerRegistry:
-    _instance: Optional["TokenizerRegistry"] = None
+    _instance: TokenizerRegistry | None = None
 
     def __init__(self) -> None:
-        self._patterns: List[tuple[str, TokenizerAdapter]] = []
-        self._default: Optional[TokenizerAdapter] = None
+        self._patterns: list[tuple[str, TokenizerAdapter]] = []
+        self._default: TokenizerAdapter | None = None
 
     @classmethod
-    def get(cls) -> "TokenizerRegistry":
+    def get(cls) -> TokenizerRegistry:
         if cls._instance is None:
             inst = cls()
             inst._bootstrap_defaults()
@@ -58,7 +58,7 @@ class TokenizerRegistry:
         # user patterns take precedence over defaults (and over earlier user patterns)
         self._patterns.insert(0, (model_pattern, adapter))
 
-    def _match(self, model_id: str) -> Optional[TokenizerAdapter]:
+    def _match(self, model_id: str) -> TokenizerAdapter | None:
         for pat, adapter in self._patterns:
             if fnmatch.fnmatch(model_id.lower(), pat.lower()):
                 return adapter
@@ -72,7 +72,7 @@ class TokenizerRegistry:
             return self._default.count(text)
         return count_tokens(text)
 
-    def encode(self, model_id: str, text: str) -> List[int]:
+    def encode(self, model_id: str, text: str) -> list[int]:
         adapter = self._match(model_id)
         if adapter is not None:
             return adapter.encode(text)
@@ -80,7 +80,7 @@ class TokenizerRegistry:
             return self._default.encode(text)
         return []
 
-    def decode(self, model_id: str, tokens: List[int]) -> str:
+    def decode(self, model_id: str, tokens: list[int]) -> str:
         adapter = self._match(model_id)
         if adapter is not None:
             return adapter.decode(tokens)
@@ -88,5 +88,5 @@ class TokenizerRegistry:
             return self._default.decode(tokens)
         return ""
 
-    def list_models(self) -> List[str]:
+    def list_models(self) -> list[str]:
         return [p for p, _ in self._patterns]

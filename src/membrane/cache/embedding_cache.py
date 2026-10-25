@@ -7,7 +7,8 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Callable, List, Literal, Optional
+from typing import Any, Literal
+from collections.abc import Callable
 
 
 def _sha256_text(text: str) -> str:
@@ -31,8 +32,8 @@ class CacheStats:
 
 @dataclass
 class _Entry:
-    vector: List[float]
-    expires_at: Optional[float]
+    vector: list[float]
+    expires_at: float | None
 
 
 class EmbeddingCache:
@@ -47,10 +48,10 @@ class EmbeddingCache:
         self,
         *,
         max_size: int = 10_000,
-        ttl_seconds: Optional[int] = 3600,
+        ttl_seconds: int | None = 3600,
         backend: Literal["memory", "redis"] = "memory",
-        redis_client: Optional[Any] = None,
-        model_id: Optional[str] = None,
+        redis_client: Any | None = None,
+        model_id: str | None = None,
     ) -> None:
         self._max_size = max_size
         self._ttl = ttl_seconds
@@ -58,7 +59,7 @@ class EmbeddingCache:
         self._redis = redis_client
         self._model_id = model_id
         self._lock = threading.Lock()
-        self._lru: "OrderedDict[str, _Entry]" = OrderedDict()
+        self._lru: OrderedDict[str, _Entry] = OrderedDict()
         self._stats = CacheStats()
 
     def _use_redis(self) -> bool:
@@ -70,7 +71,7 @@ class EmbeddingCache:
             return _sha256_text(f"{self._model_id}\x00{text}")
         return _sha256_text(text)
 
-    def _lookup(self, key: str) -> Optional[List[float]]:
+    def _lookup(self, key: str) -> list[float] | None:
         """Return a cached vector or ``None``; does not touch hit/miss stats."""
         if self._use_redis():
             import json
@@ -92,7 +93,7 @@ class EmbeddingCache:
             self._lru.move_to_end(key)
             return list(ent.vector)
 
-    def _store(self, key: str, vec: List[float]) -> None:
+    def _store(self, key: str, vec: list[float]) -> None:
         if self._use_redis():
             import json
 
@@ -123,8 +124,8 @@ class EmbeddingCache:
     def get_or_compute(
         self,
         text: str,
-        embed_fn: Callable[[str], List[float]],
-    ) -> List[float]:
+        embed_fn: Callable[[str], list[float]],
+    ) -> list[float]:
         key = self._key(text)
         cached = self._lookup(key)
         if cached is not None:
@@ -137,13 +138,13 @@ class EmbeddingCache:
 
     def get_or_compute_batch(
         self,
-        texts: List[str],
-        embed_fn: Callable[[List[str]], List[List[float]]],
-    ) -> List[List[float]]:
-        out: List[List[float]] = [[] for _ in texts]
+        texts: list[str],
+        embed_fn: Callable[[list[str]], list[list[float]]],
+    ) -> list[list[float]]:
+        out: list[list[float]] = [[] for _ in texts]
         # identical texts in one batch are embedded once
-        pending: "OrderedDict[str, List[int]]" = OrderedDict()
-        pending_texts: List[str] = []
+        pending: OrderedDict[str, list[int]] = OrderedDict()
+        pending_texts: list[str] = []
         hits = 0
         misses = 0
         for i, t in enumerate(texts):

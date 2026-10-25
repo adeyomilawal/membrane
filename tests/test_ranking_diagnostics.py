@@ -28,9 +28,9 @@ def test_compute_ranking_diagnostics_no_rerank_neutral_relevance():
 
 def test_compute_ranking_diagnostics_with_weights_and_freshness():
     m1 = MemoryItem(id="a", content="x", memory_type="semantic", priority=2)
-    setattr(m1, "_membrane_freshness_score", 1.0)
+    m1._membrane_freshness_score = 1.0
     m2 = MemoryItem(id="b", content="y", memory_type="procedural", priority=1)
-    setattr(m2, "_membrane_freshness_score", 0.5)
+    m2._membrane_freshness_score = 0.5
     retrieved = [(m1, TIER_SEMANTIC), (m2, TIER_PROCEDURAL)]
     out = compute_ranking_diagnostics(
         retrieved,

@@ -5,7 +5,8 @@ from __future__ import annotations
 import copy
 import dataclasses
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 from membrane.classifier.classifier import MemoryClassifier, MemoryKind
 from membrane.firewall import TIER_EPISODIC, TIER_PROCEDURAL, TIER_SEMANTIC, count_tokens
@@ -35,15 +36,15 @@ def resolve_profile(
     recorder: Any = None,
     tokenizer_registry: Any = None,
     trace_exporters: Any = None,
-    enable_lineage: Optional[bool] = None,
-    enable_profiler: Optional[bool] = None,
+    enable_lineage: bool | None = None,
+    enable_profiler: bool | None = None,
     metrics_collector: Any = None,
     lineage_tracker: Any = None,
 ) -> Any:
     """Return a MembraneProfile; raise if both ``profile`` and component kwargs are set."""
     from membrane.profile import MembraneProfile
 
-    component_kwargs: Dict[str, Any] = {
+    component_kwargs: dict[str, Any] = {
         "reranker": reranker,
         "deduplicator": deduplicator,
         "compression": compression,
@@ -91,12 +92,12 @@ def _kind_to_memory_type(kind: MemoryKind) -> str:
 
 
 def apply_classifier(
-    classifier: Optional[MemoryClassifier],
+    classifier: MemoryClassifier | None,
     memories: Sequence[Any],
-) -> List[Any]:
+) -> list[Any]:
     if classifier is None:
         return list(memories)
-    out: List[Any] = []
+    out: list[Any] = []
     for m in memories:
         text = str(getattr(m, "content", m))
         cr = classifier.classify(text)
@@ -129,7 +130,7 @@ def estimate_memory_tokens(memories: Sequence[Any]) -> int:
     return total
 
 
-def policy_feature_disabled(policy_disable: Optional[Sequence[str]], name: str) -> bool:
+def policy_feature_disabled(policy_disable: Sequence[str] | None, name: str) -> bool:
     if not policy_disable:
         return False
     return name in policy_disable

@@ -8,17 +8,18 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import AbstractSet, Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
+from typing import AbstractSet, Any, Literal
+from collections.abc import Callable, Mapping, Sequence
 
 import membrane.config as os_config
 
 logger = logging.getLogger(__name__)
 
 # Use Literal[False] only (not bool) so failure does not widen to True | False.
-_tiktoken_encoding: Union[Any, Literal[False], None] = None
+_tiktoken_encoding: Any | Literal[False] | None = None
 
 
-def _get_encoding() -> Union[Any, Literal[False]]:
+def _get_encoding() -> Any | Literal[False]:
     """Lazy-load tiktoken encoding (cl100k_base)."""
     global _tiktoken_encoding
     if _tiktoken_encoding is None:
@@ -51,7 +52,7 @@ _MEM_REF_PATTERN = re.compile(r"\[Mem:(\d+)\]")
 _LEADING_MEM_REF = re.compile(r"^\s*\[Mem:(\d+)\]")
 
 
-def _extract_mem_refs(segment: str) -> List[Tuple[int, int]]:
+def _extract_mem_refs(segment: str) -> list[tuple[int, int]]:
     """Return list of (local_index, start_pos) for [Mem:N] in segment."""
     out = []
     for m in _MEM_REF_PATTERN.finditer(segment):
@@ -63,7 +64,7 @@ def _extract_mem_refs(segment: str) -> List[Tuple[int, int]]:
     return out
 
 
-def _segment_refs(segment: str) -> List[int]:
+def _segment_refs(segment: str) -> list[int]:
     """Refs a segment owns: its leading ``[Mem:N]``, else every ref in it (compressed text).
 
     A memory that merely mentions ``[Mem:M]`` in its content does not own ``M``.
@@ -83,9 +84,9 @@ class PreFlightContextFirewall:
     def __init__(
         self,
         max_tokens: int,
-        preflight_token_threshold: Optional[int] = None,
-        preflight_target_tokens: Optional[int] = None,
-        count_fn: Optional[Callable[[str], int]] = None,
+        preflight_token_threshold: int | None = None,
+        preflight_target_tokens: int | None = None,
+        count_fn: Callable[[str], int] | None = None,
     ):
         self.max_tokens = max_tokens
         # Counts with the caller's tokenizer when given, so the budget matches what is reported.
@@ -105,13 +106,13 @@ class PreFlightContextFirewall:
         self,
         core_text: str,
         end_text: str,
-        middle_segments: Sequence[Tuple[str, int]],
-        ref_map: Optional[Dict[int, str]] = None,
+        middle_segments: Sequence[tuple[str, int]],
+        ref_map: dict[int, str] | None = None,
         *,
-        segment_weights: Optional[Sequence[Union[float, int]]] = None,
-        tier_shares: Optional[Mapping[int, float]] = None,
-        pinned_tiers: Optional[AbstractSet[int]] = None,
-    ) -> Tuple[str, Dict[int, str], int, Dict[str, Any]]:
+        segment_weights: Sequence[float | int] | None = None,
+        tier_shares: Mapping[int, float] | None = None,
+        pinned_tiers: AbstractSet[int] | None = None,
+    ) -> tuple[str, dict[int, str], int, dict[str, Any]]:
         """
         Build final context string under max_tokens; trim middle by priority.
 
@@ -158,7 +159,7 @@ class PreFlightContextFirewall:
                 self.max_tokens,
             )
             combined = core_text + "\n\n" + end_text
-            stats: Dict[str, Any] = {
+            stats: dict[str, Any] = {
                 "segments_offered": len(sorted_segments),
                 "segments_kept": 0,
                 "tokens_trimmed": int(offered_tok),
@@ -169,10 +170,10 @@ class PreFlightContextFirewall:
         budget = self.max_tokens - reserved
         middle_budget = budget
         shares = {t: f for t, f in (tier_shares or {}).items() if not pinned_tiers or t not in pinned_tiers}
-        used: Dict[int, int] = {}
+        used: dict[int, int] = {}
         procedural_count = 0
-        kept_idx: List[int] = []
-        deferred: List[int] = []
+        kept_idx: list[int] = []
+        deferred: list[int] = []
 
         def _take(i: int) -> bool:
             nonlocal budget, procedural_count
@@ -208,7 +209,7 @@ class PreFlightContextFirewall:
                 break
             kept.pop()
 
-        kept_refs: Dict[int, str] = {}
+        kept_refs: dict[int, str] = {}
         for seg_text in kept:
             for idx in _segment_refs(seg_text):
                 if idx in ref_map:
@@ -223,7 +224,7 @@ class PreFlightContextFirewall:
         return final, kept_refs, total, stats
 
 
-def _ref_map_from_text(text: str, ref_map: Dict[int, str]) -> Dict[int, str]:
+def _ref_map_from_text(text: str, ref_map: dict[int, str]) -> dict[int, str]:
     """Extract [Mem:N] from text and return submap of ref_map for those N."""
     out = {}
     for idx, _ in _extract_mem_refs(text):

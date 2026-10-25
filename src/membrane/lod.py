@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 from membrane import config as os_config
 
@@ -69,7 +70,7 @@ def cosine_distance(a, b) -> float:
 def compute_attention_shift(
     last_user_messages: Sequence[str],
     current_user_message: str,
-    threshold: Optional[float] = None,
+    threshold: float | None = None,
 ) -> bool:
     """
     True if current message is far from the centroid of the last user messages.
@@ -97,7 +98,7 @@ def compute_attention_shift(
 def compute_attention_shift_with_embeddings(
     last_user_message_embeddings: Sequence[Sequence[float]],
     current_user_embedding: Sequence[float],
-    threshold: Optional[float] = None,
+    threshold: float | None = None,
 ) -> bool:
     """
     Attention shift using precomputed embeddings (caller supplies embedder).

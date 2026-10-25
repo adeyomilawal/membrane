@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 
 
@@ -11,7 +12,7 @@ from typing import Any, Dict, List, Optional, Sequence
 class PolicyCondition:
     """Serializable condition descriptor."""
 
-    raw: Dict[str, Any]
+    raw: dict[str, Any]
 
     def matches(
         self,
@@ -19,7 +20,7 @@ class PolicyCondition:
         query: str,
         memories: Sequence[Any],
         estimated_tokens: int,
-        model_id: Optional[str],
+        model_id: str | None,
     ) -> bool:
         d = self.raw
         if d is True or d == "always":
@@ -87,7 +88,7 @@ def _validate_action(policy_name: str, action: Any) -> None:
         raise ValueError(f"policy {policy_name!r}: action 'override' must be a mapping")
 
 
-def _validate_condition(policy_name: str, cond: Dict[str, Any]) -> None:
+def _validate_condition(policy_name: str, cond: dict[str, Any]) -> None:
     """Raise ``ValueError`` for empty, unknown-key, or malformed conditions."""
     unknown = sorted(set(cond) - _CONDITION_KEYS)
     if unknown or not cond:
@@ -107,21 +108,21 @@ def _validate_condition(policy_name: str, cond: Dict[str, Any]) -> None:
 
 @dataclass
 class PolicyAction:
-    raw: Dict[str, Any]
+    raw: dict[str, Any]
 
 
 @dataclass
 class Policy:
     name: str
     condition: PolicyCondition
-    actions: List[PolicyAction]
+    actions: list[PolicyAction]
     priority: int = 0
 
 
 class PolicyEngine:
     """Loads policies from dict/YAML and produces compiler kwargs overrides."""
 
-    def __init__(self, policies: List[Policy]) -> None:
+    def __init__(self, policies: list[Policy]) -> None:
         self._policies = sorted(policies, key=lambda p: -p.priority)
 
     @classmethod
@@ -135,9 +136,9 @@ class PolicyEngine:
         return cls.from_dict(data if isinstance(data, dict) else {})
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> PolicyEngine:
+    def from_dict(cls, data: dict[str, Any]) -> PolicyEngine:
         raw_list = data.get("policies") or []
-        policies: List[Policy] = []
+        policies: list[Policy] = []
         for item in raw_list:
             if not isinstance(item, dict):
                 continue
@@ -166,10 +167,10 @@ class PolicyEngine:
         *,
         query: str,
         memories: Sequence[Any],
-        compiler_kwargs: Dict[str, Any],
+        compiler_kwargs: dict[str, Any],
         estimated_tokens: int = 0,
-        model_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
         out = dict(compiler_kwargs)
         for pol in self._policies:
             if not pol.condition.matches(
@@ -183,7 +184,7 @@ class PolicyEngine:
                 self._apply_action(out, act.raw)
         return out
 
-    def _apply_action(self, out: Dict[str, Any], raw: Dict[str, Any]) -> None:
+    def _apply_action(self, out: dict[str, Any], raw: dict[str, Any]) -> None:
         if "set_budget" in raw:
             b = raw["set_budget"]
             out.setdefault("policy_budget_override", {}).update(b)

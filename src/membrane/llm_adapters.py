@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+from collections.abc import Awaitable, Callable
 
 
 @runtime_checkable
@@ -46,8 +47,8 @@ class CallablePreFlightAnalyst:
 
 
 def as_preflight_analyst(
-    fn: Optional[Callable[..., Awaitable[str]]],
-) -> Optional[PreFlightAnalyst]:
+    fn: Callable[..., Awaitable[str]] | None,
+) -> PreFlightAnalyst | None:
     """Convert async function to PreFlightAnalyst, or None."""
     if fn is None:
         return None

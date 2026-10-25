@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any
+from collections.abc import Callable, Sequence
 
 from membrane.freshness.decay import ExponentialDecay
 
@@ -15,7 +16,7 @@ class FreshnessResult:
     age_seconds: float
     freshness_score: float
     is_stale: bool
-    last_verified: Optional[float] = None
+    last_verified: float | None = None
 
 
 class FreshnessManager:
@@ -24,7 +25,7 @@ class FreshnessManager:
         *,
         decay_fn: Any = None,
         staleness_threshold: float = 0.3,
-        reference_time: Optional[float] = None,
+        reference_time: float | None = None,
     ) -> None:
         self._decay = decay_fn or ExponentialDecay()
         self._staleness_threshold = staleness_threshold
@@ -37,13 +38,13 @@ class FreshnessManager:
         self,
         memories: Sequence[Any],
         *,
-        timestamp_fn: Optional[Callable[[Any], Optional[float]]] = None,
-        id_fn: Optional[Callable[[Any], str]] = None,
-    ) -> List[FreshnessResult]:
+        timestamp_fn: Callable[[Any], float | None] | None = None,
+        id_fn: Callable[[Any], str] | None = None,
+    ) -> list[FreshnessResult]:
         tf = timestamp_fn or (lambda m: getattr(m, "timestamp", None))
         idf = id_fn or (lambda m: str(getattr(m, "id", id(m))))
         now = self._now()
-        out: List[FreshnessResult] = []
+        out: list[FreshnessResult] = []
         for m in memories:
             ts = tf(m)
             age = 0.0 if ts is None else max(0.0, now - float(ts))
@@ -64,9 +65,9 @@ class FreshnessManager:
         self,
         memories: Sequence[Any],
         *,
-        timestamp_fn: Optional[Callable[[Any], Optional[float]]] = None,
-        weight_fn: Optional[Callable[[Any], float]] = None,
-        weight_setter: Optional[Callable[[Any, float], None]] = None,
+        timestamp_fn: Callable[[Any], float | None] | None = None,
+        weight_fn: Callable[[Any], float] | None = None,
+        weight_setter: Callable[[Any, float], None] | None = None,
     ) -> Sequence[Any]:
         scores = self.score(memories, timestamp_fn=timestamp_fn)
         wfn = weight_fn or self._default_weight
@@ -108,7 +109,7 @@ class FreshnessManager:
         self,
         memories: Sequence[Any],
         *,
-        timestamp_fn: Optional[Callable[[Any], Optional[float]]] = None,
-    ) -> List[Any]:
+        timestamp_fn: Callable[[Any], float | None] | None = None,
+    ) -> list[Any]:
         scores = self.score(memories, timestamp_fn=timestamp_fn)
         return [m for m, fr in zip(memories, scores) if fr.is_stale]

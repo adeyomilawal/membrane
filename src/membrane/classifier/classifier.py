@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import List, Sequence
+from collections.abc import Sequence
 
 from membrane.classifier.features import FEATURE_DIM, extract_features
 
@@ -32,7 +32,7 @@ def _sigmoid(x: float) -> float:
     return z / (1.0 + z)
 
 
-def _default_weights() -> List[List[float]]:
+def _default_weights() -> list[list[float]]:
     """Hand-tuned weights: rows = classes (episodic, semantic, procedural, instructional, conversational)."""
     rng = FEATURE_DIM
     rows = []
@@ -84,8 +84,8 @@ class MemoryClassifier:
     ) -> None:
         self.confidence_threshold = confidence_threshold
         self.fallback_kind = fallback_kind
-        self._weights: List[List[float]] = _default_weights()
-        self._biases: List[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
+        self._weights: list[list[float]] = _default_weights()
+        self._biases: list[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
         p = _load_weights_path()
         if p.is_file():
             try:
@@ -101,7 +101,7 @@ class MemoryClassifier:
 
     def classify(self, text: str) -> ClassificationResult:
         feats = extract_features(text)
-        scores: List[float] = []
+        scores: list[float] = []
         for i in range(5):
             z = self._biases[i] + sum(
                 self._weights[i][j] * feats[j] for j in range(min(len(feats), FEATURE_DIM))
@@ -116,5 +116,5 @@ class MemoryClassifier:
         feat_dict = {f"f{i}": feats[i] for i in range(len(feats))}
         return ClassificationResult(kind=kind, confidence=float(conf), features=feat_dict)
 
-    def classify_batch(self, texts: Sequence[str]) -> List[ClassificationResult]:
+    def classify_batch(self, texts: Sequence[str]) -> list[ClassificationResult]:
         return [self.classify(t) for t in texts]

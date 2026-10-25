@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any
+from collections.abc import Callable, Sequence
 
 from membrane.firewall import count_tokens
 
@@ -14,7 +15,7 @@ _MODEL: Any = None
 _MODEL_FAILED = False
 
 
-def _cosine(a: List[float], b: List[float]) -> float:
+def _cosine(a: list[float], b: list[float]) -> float:
     import math
 
     dot = sum(x * y for x, y in zip(a, b))
@@ -25,7 +26,7 @@ def _cosine(a: List[float], b: List[float]) -> float:
     return dot / (na * nb)
 
 
-def _hash_embed(text: str, dim: int = 32) -> List[float]:
+def _hash_embed(text: str, dim: int = 32) -> list[float]:
     """Deterministic pseudo-embedding for environments without fastembed."""
     import hashlib
 
@@ -50,7 +51,7 @@ def _get_model() -> Any:
     return _MODEL
 
 
-def _default_embed_batch(texts: List[str], dim: int = 32) -> List[List[float]]:
+def _default_embed_batch(texts: list[str], dim: int = 32) -> list[list[float]]:
     model = _get_model()
     if model is not None:
         try:
@@ -64,11 +65,11 @@ def _default_embed_batch(texts: List[str], dim: int = 32) -> List[List[float]]:
 
 @dataclass
 class DeduplicationResult:
-    kept: List[Any]
-    removed: List[Any]
-    clusters: List[List[int]]
+    kept: list[Any]
+    removed: list[Any]
+    clusters: list[list[int]]
     tokens_saved: int
-    merge_map: Dict[int, int]
+    merge_map: dict[int, int]
 
 
 class SemanticDeduplicator:
@@ -77,7 +78,7 @@ class SemanticDeduplicator:
         *,
         similarity_threshold: float = 0.85,
         merge_strategy: str = "keep_longest",
-        embedding_fn: Optional[Callable[[List[str]], List[List[float]]]] = None,
+        embedding_fn: Callable[[list[str]], list[list[float]]] | None = None,
         embedding_cache: Any = None,
     ) -> None:
         self._threshold = similarity_threshold
@@ -85,9 +86,9 @@ class SemanticDeduplicator:
         self._embed_fn = embedding_fn or _default_embed_batch
         self._cache = embedding_cache
 
-    def _embed(self, texts: List[str]) -> List[List[float]]:
+    def _embed(self, texts: list[str]) -> list[list[float]]:
         if self._cache is not None:
-            out: List[List[float]] = []
+            out: list[list[float]] = []
             for t in texts:
                 out.append(
                     self._cache.get_or_compute(
@@ -102,7 +103,7 @@ class SemanticDeduplicator:
         memories: Sequence[Any],
         *,
         text_fn: Callable[[Any], str] = str,
-        score_fn: Optional[Callable[[Any], float]] = None,
+        score_fn: Callable[[Any], float] | None = None,
     ) -> DeduplicationResult:
         texts = [text_fn(m) for m in memories]
         if not texts:
@@ -114,7 +115,7 @@ class SemanticDeduplicator:
 
         # compare each item against cluster representatives (first member) only, so
         # similarity is never chained transitively through intermediate items
-        clusters_map: Dict[int, List[int]] = {}
+        clusters_map: dict[int, list[int]] = {}
         for i in range(n):
             for rep, members in clusters_map.items():
                 if _cosine(vecs[rep], vecs[i]) >= self._threshold:
@@ -123,9 +124,9 @@ class SemanticDeduplicator:
             else:
                 clusters_map[i] = [i]
 
-        kept_idx: List[int] = []
-        removed_idx: List[int] = []
-        merge_map: Dict[int, int] = {}
+        kept_idx: list[int] = []
+        removed_idx: list[int] = []
+        merge_map: dict[int, int] = {}
 
         for _root, idxs in clusters_map.items():
             if len(idxs) == 1:

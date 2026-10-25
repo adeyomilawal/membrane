@@ -7,7 +7,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from importlib import resources
-from typing import Any, Dict, List, Literal, Mapping, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
+from collections.abc import Mapping, Sequence
 
 
 @runtime_checkable
@@ -15,7 +16,7 @@ class KernelMemoryRecord(Protocol):
     """Minimum surface for objects serialized into the sacrifice zone."""
 
     @property
-    def id(self) -> Optional[str]:  # noqa: A003 - domain id
+    def id(self) -> str | None:
         ...
 
     @property
@@ -43,8 +44,8 @@ class KernelMemoryObject:
     relevance_score: float = 1.0
     semantic_tier: int = 2
     temporal_weight: float = 1.0
-    provenance: Dict[str, Any] = field(default_factory=dict)
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))  # noqa: A003
+    provenance: dict[str, Any] = field(default_factory=dict)
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def __post_init__(self) -> None:
         if self.semantic_tier not in (1, 2, 3):
@@ -98,7 +99,7 @@ class KernelMemoryObject:
             provenance=dict(prov or {}),
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict matching the packaged schema."""
         return {
             "id": self.id,
@@ -110,7 +111,7 @@ class KernelMemoryObject:
         }
 
 
-def normalize_compile_memories(memories: Sequence[Any]) -> List[Any]:
+def normalize_compile_memories(memories: Sequence[Any]) -> list[Any]:
     """
     Normalize inputs for compilation.
 
@@ -119,7 +120,7 @@ def normalize_compile_memories(memories: Sequence[Any]) -> List[Any]:
       (JSON interchange / retrieval systems).
     - All other objects pass through unchanged (duck-typed memories).
     """
-    out: List[Any] = []
+    out: list[Any] = []
     for m in memories:
         if isinstance(m, KernelMemoryObject):
             out.append(m)
@@ -130,7 +131,7 @@ def normalize_compile_memories(memories: Sequence[Any]) -> List[Any]:
     return out
 
 
-def load_kernel_memory_json_schema() -> Dict[str, Any]:
+def load_kernel_memory_json_schema() -> dict[str, Any]:
     """Load the packaged JSON Schema for :class:`KernelMemoryObject` (draft 2020-12)."""
     pkg = resources.files("membrane.schemas").joinpath("kernel_memory_object.schema.json")
     return json.loads(pkg.read_text(encoding="utf-8"))
@@ -144,7 +145,7 @@ class MemoryItem:
     ``priority`` matches firewall tiers: 1=procedural, 2=semantic, 3=episodic.
     """
 
-    id: str  # noqa: A003
+    id: str
     content: str
     memory_type: Literal["semantic", "episodic", "procedural"] = "semantic"
     priority: int = 2
@@ -183,7 +184,7 @@ class SemanticMemory:
     id: str
     subject: str
     predicate: str
-    object: str  # noqa: A003
+    object: str
     confidence: float = 0.0
 
     @property
@@ -198,9 +199,9 @@ class EpisodicMemory:
     id: str
     query: str = ""
     stage3_synthesis: str = ""
-    timestamp: Optional[datetime | str] = None
-    domain: Optional[str] = None
-    learned_insights: Optional[List[str]] = None
+    timestamp: datetime | str | None = None
+    domain: str | None = None
+    learned_insights: list[str] | None = None
 
     @property
     def memory_kind(self) -> Literal["semantic", "episodic", "procedural"]:
@@ -224,15 +225,15 @@ class ProceduralMemory:
     id: str
     name: str
     description: str = ""
-    steps: List[ProceduralStep] = field(default_factory=list)
-    success_rate: Optional[float] = None
+    steps: list[ProceduralStep] = field(default_factory=list)
+    success_rate: float | None = None
 
     @property
     def memory_kind(self) -> Literal["semantic", "episodic", "procedural"]:
         return "procedural"
 
 
-def infer_memory_kind(obj: Any) -> Optional[Literal["semantic", "episodic", "procedural"]]:
+def infer_memory_kind(obj: Any) -> Literal["semantic", "episodic", "procedural"] | None:
     """
     Infer memory kind for duck-typed objects (no memory_kind attribute).
 
@@ -242,7 +243,7 @@ def infer_memory_kind(obj: Any) -> Optional[Literal["semantic", "episodic", "pro
         return None
     if hasattr(obj, "memory_kind"):
         try:
-            mk = getattr(obj, "memory_kind")
+            mk = obj.memory_kind
             if mk in ("semantic", "episodic", "procedural"):
                 return mk  # type: ignore[return-value]
         except Exception:

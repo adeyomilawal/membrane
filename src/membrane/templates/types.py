@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
 class ParsedDocument:
     """Result of parsing a template source (optional ``extends`` + block overrides)."""
 
-    extends_parent: Optional[str] = None
-    block_overrides: Dict[str, List[Any]] = field(default_factory=dict)
-    nodes: List[Any] = field(default_factory=list)
+    extends_parent: str | None = None
+    block_overrides: dict[str, list[Any]] = field(default_factory=dict)
+    nodes: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -36,20 +36,20 @@ class VarNode:
 @dataclass
 class IfNode:
     condition: str
-    children: List[Any]
+    children: list[Any]
 
 
 @dataclass
 class ForNode:
     item: str
     seq: str
-    children: List[Any]
+    children: list[Any]
 
 
 @dataclass
 class RoleBlockNode:
     role: str
-    children: List[Any]
+    children: list[Any]
 
 
 @dataclass
@@ -57,4 +57,4 @@ class BlockNode:
     """Named region ``{% block name %}...{% endblock %}`` (override via ``{% extends %}``)."""
 
     name: str
-    children: List[Any]
+    children: list[Any]

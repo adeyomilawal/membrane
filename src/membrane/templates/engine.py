@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from membrane.templates.parser import parse_document
 from membrane.templates.types import (
@@ -19,13 +19,13 @@ class TemplateMissingVariable(KeyError):
     """Raised when a required template variable is unbound."""
 
 
-def merge_block_nodes(nodes: List[Any], overrides: Dict[str, List[Any]]) -> List[Any]:
+def merge_block_nodes(nodes: list[Any], overrides: dict[str, list[Any]]) -> list[Any]:
     """Apply child ``block`` overrides onto a parent AST (single ``extends`` level; nested blocks supported)."""
-    out: List[Any] = []
+    out: list[Any] = []
     for n in nodes:
         if isinstance(n, BlockNode):
             rep = overrides.get(n.name)
-            ch: List[Any] = list(rep) if rep is not None else list(n.children)
+            ch: list[Any] = list(rep) if rep is not None else list(n.children)
             out.append(BlockNode(n.name, merge_block_nodes(ch, overrides)))
         elif isinstance(n, IfNode):
             out.append(IfNode(n.condition, merge_block_nodes(n.children, overrides)))
@@ -50,9 +50,9 @@ class PromptTemplate:
         self,
         template: str,
         *,
-        variables: Optional[List[Any]] = None,
-        parent: Optional["PromptTemplate"] = None,
-        loader: Optional[Dict[str, str]] = None,
+        variables: list[Any] | None = None,
+        parent: PromptTemplate | None = None,
+        loader: dict[str, str] | None = None,
     ) -> None:
         self._source = template
         self._loader = loader
@@ -76,19 +76,19 @@ class PromptTemplate:
         self._parent = parent
 
     @classmethod
-    def from_file(cls, path: str) -> "PromptTemplate":
+    def from_file(cls, path: str) -> PromptTemplate:
         with open(path, encoding="utf-8") as f:
             return cls(f.read())
 
     @property
-    def variables(self) -> List[Any]:
+    def variables(self) -> list[Any]:
         return list(self._variables or [])
 
-    def validate(self, **kwargs: Any) -> List[str]:
+    def validate(self, **kwargs: Any) -> list[str]:
         return [name for name in self._collect_vars(self._ast) if name not in kwargs]
 
-    def _collect_vars(self, nodes: List[Any], bound: frozenset = frozenset()) -> List[str]:
-        names: List[str] = []
+    def _collect_vars(self, nodes: list[Any], bound: frozenset = frozenset()) -> list[str]:
+        names: list[str] = []
         for n in nodes:
             if isinstance(n, VarNode):
                 if n.name not in bound:
@@ -100,9 +100,7 @@ class PromptTemplate:
                 if n.seq not in bound:
                     names.append(n.seq)
                 names.extend(self._collect_vars(n.children, bound | {n.item}))
-            elif isinstance(n, RoleBlockNode):
-                names.extend(self._collect_vars(n.children, bound))
-            elif isinstance(n, BlockNode):
+            elif isinstance(n, RoleBlockNode) or isinstance(n, BlockNode):
                 names.extend(self._collect_vars(n.children, bound))
         return names
 
@@ -111,7 +109,7 @@ class PromptTemplate:
         *,
         compile_result: Any = None,
         **kwargs: Any,
-    ) -> List[Dict[str, str]]:
+    ) -> list[dict[str, str]]:
         ctx = dict(kwargs)
         if compile_result is not None:
             msgs = getattr(compile_result, "messages", None) or []
@@ -124,12 +122,12 @@ class PromptTemplate:
             raise TemplateMissingVariable(f"Missing template variables: {missing}")
         return self._render_nodes(self._ast, ctx)
 
-    def _render_nodes(self, nodes: List[Any], ctx: Dict[str, Any]) -> List[Dict[str, str]]:
+    def _render_nodes(self, nodes: list[Any], ctx: dict[str, Any]) -> list[dict[str, str]]:
         # each segment: [role, parts, is_role_block]; role blocks never merge with neighbours
-        segments: List[List[Any]] = []
+        segments: list[list[Any]] = []
         for n in nodes:
             self._render_node(n, ctx, segments)
-        out: List[Dict[str, str]] = []
+        out: list[dict[str, str]] = []
         for role, parts, _ in segments:
             content = "".join(parts).strip()
             if content:
@@ -139,8 +137,8 @@ class PromptTemplate:
     def _render_node(
         self,
         n: Any,
-        ctx: Dict[str, Any],
-        segments: List[List[Any]],
+        ctx: dict[str, Any],
+        segments: list[list[Any]],
     ) -> None:
         if isinstance(n, TextNode):
             self._current(segments).append(n.text)
@@ -171,12 +169,12 @@ class PromptTemplate:
                 self._render_node(c, ctx, segments)
 
     @staticmethod
-    def _current(segments: List[List[Any]]) -> List[str]:
+    def _current(segments: list[list[Any]]) -> list[str]:
         if not segments:
             segments.append(["system", [], False])
         return segments[-1][1]
 
-    def _truthy(self, cond: str, ctx: Dict[str, Any]) -> bool:
+    def _truthy(self, cond: str, ctx: dict[str, Any]) -> bool:
         c = cond.strip()
         if c in ctx:
             return bool(ctx[c])

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from membrane import config as os_config
 from membrane.firewall import count_tokens
@@ -27,8 +26,8 @@ class GlaciateResult:
 
 
 def glaciate(
-    full_system_text: Optional[str],
-    max_cacheable_tokens: Optional[int] = None,
+    full_system_text: str | None,
+    max_cacheable_tokens: int | None = None,
 ) -> GlaciateResult:
     """
     Split full system text into cacheable prefix and dynamic tail.

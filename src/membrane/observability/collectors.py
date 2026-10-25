@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from membrane.observability.callbacks import LoggingStructuredCallback, StructuredMetricsCallback
 from membrane.observability.events import MetricEvent, MetricKind
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 class MetricsCollector:
     """Collects compile-time metrics and forwards them to a callback."""
 
-    def __init__(self, callback: Optional[StructuredMetricsCallback] = None) -> None:
+    def __init__(self, callback: StructuredMetricsCallback | None = None) -> None:
         self._callback: StructuredMetricsCallback = callback or LoggingStructuredCallback()
 
     @property

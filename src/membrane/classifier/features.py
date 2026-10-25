@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 import re
-from typing import List
 
 
 # case-sensitive and code-shaped so prose like "I got this from John" does not match
@@ -22,7 +21,7 @@ _DEF = re.compile(r"\b(is a |is an |defined as|refers to|means )\b", re.I)
 _IMPERATIVE = re.compile(r"\b(always|never|must |should |do not|run |execute )\b", re.I)
 
 
-def extract_features(text: str) -> List[float]:
+def extract_features(text: str) -> list[float]:
     """Return a fixed-length feature vector (~15 features)."""
     t = text or ""
     lower = t.lower()

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple
+from typing import Any, Literal
+from collections.abc import Callable, Sequence
 
 from membrane.compiler import CompileResult, ContextCompiler
 from membrane.conversation.summarizer import summarize_turns
@@ -24,7 +25,7 @@ class ConversationManager:
         compiler: ContextCompiler,
         *,
         max_turns: int = 50,
-        summarization_fn: Optional[Callable[[str], str]] = None,
+        summarization_fn: Callable[[str], str] | None = None,
         window_strategy: Literal["sliding", "summarize", "hybrid"] = "hybrid",
         summary_trigger: int = 10,
         topic_aware: bool = True,
@@ -35,8 +36,8 @@ class ConversationManager:
         self._window_strategy = window_strategy
         self._summary_trigger = summary_trigger
         self._topic_aware = topic_aware
-        self._turns: List[Tuple[str, str]] = []
-        self._summary: Optional[str] = None
+        self._turns: list[tuple[str, str]] = []
+        self._summary: str | None = None
 
     def add_turn(self, role: str, content: str) -> None:
         self._turns.append((role, content))
@@ -58,7 +59,7 @@ class ConversationManager:
         self._summary = summarize_turns(old, self._summarization_fn)
         self._turns = self._turns[-keep:]
 
-    def get_summary(self) -> Optional[str]:
+    def get_summary(self) -> str | None:
         return self._summary
 
     def compile(
@@ -69,7 +70,7 @@ class ConversationManager:
         **kwargs: Any,
     ) -> CompileResult:
         """Compile with optional ``conversation_messages`` built from history + summary."""
-        conv: List[Dict[str, str]] = []
+        conv: list[dict[str, str]] = []
         if self._summary:
             conv.append(
                 {
@@ -87,7 +88,7 @@ class ConversationManager:
             **merged,
         )
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         return {
             "turns": self._turns,
             "summary": self._summary,
@@ -100,10 +101,10 @@ class ConversationManager:
     @classmethod
     def deserialize(
         cls,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         compiler: ContextCompiler,
         *,
-        summarization_fn: Optional[Callable[[str], str]] = None,
+        summarization_fn: Callable[[str], str] | None = None,
     ) -> ConversationManager:
         m = cls(
             compiler,

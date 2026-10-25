@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from contextvars import ContextVar
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from membrane import config as os_config
 from membrane.memory_protocol import infer_memory_kind
@@ -36,7 +36,7 @@ def _dense_text(value: Any, default_max_chars: int) -> str:
     return out
 
 
-def _dense_field(value: Any, max_chars: Optional[int]) -> str:
+def _dense_field(value: Any, max_chars: int | None) -> str:
     """Normalize a value for dense key=value segments (pipe-safe, single line)."""
     s = str(value).replace("|", ",").replace("\n", " ").strip()
     if max_chars is not None and len(s) > max_chars:
@@ -48,7 +48,7 @@ class DenseSerializer:
     """Serializes semantic, episodic, and procedural memories into dense one-line strings."""
 
     @staticmethod
-    def format(memory_object: Any, local_index: Optional[int] = None) -> str:
+    def format(memory_object: Any, local_index: int | None = None) -> str:
         """Produce a single dense line for the memory object."""
         kind = infer_memory_kind(memory_object)
         if kind == "semantic":
@@ -84,7 +84,7 @@ class DenseSerializer:
         return f"[fact] subj={subj} | rel={rel} | obj={o} | conf={conf_val:.2f}"
 
     @staticmethod
-    def _format_episode(episode: Any, local_index: Optional[int]) -> str:
+    def _format_episode(episode: Any, local_index: int | None) -> str:
         idx = local_index if local_index is not None else 0
         ts = getattr(episode, "timestamp", None)
         if isinstance(ts, datetime):
@@ -103,7 +103,7 @@ class DenseSerializer:
         return f"[Mem:{idx}] kind=episodic | date={date_str} | text={text}"
 
     @staticmethod
-    def _format_procedure(procedure: Any, local_index: Optional[int]) -> str:
+    def _format_procedure(procedure: Any, local_index: int | None) -> str:
         idx = local_index if local_index is not None else 0
         steps = getattr(procedure, "steps", []) or []
         text = _procedure_text(procedure)
@@ -133,7 +133,7 @@ class DenseSerializer:
         return f"[Mem:{idx}] kind=procedural | name={name_safe} | steps={steps_str} | outcome={outcome}"
 
     @staticmethod
-    def format_checked(memory_object: Any, local_index: Optional[int] = None) -> "tuple[str, bool]":
+    def format_checked(memory_object: Any, local_index: int | None = None) -> tuple[str, bool]:
         """Like :meth:`format`, plus whether the memory's text was truncated."""
         token = _text_truncated.set(False)
         try:
@@ -222,12 +222,12 @@ class DenseSerializer:
 
     @staticmethod
     def format_batch(
-        memory_objects: List[Any],
+        memory_objects: list[Any],
         start_index: int = 1,
-    ) -> tuple[List[str], Dict[int, str]]:
+    ) -> tuple[list[str], dict[int, str]]:
         """Serialize list of objects with .id into lines and ref_map."""
         lines = []
-        ref_map: Dict[int, str] = {}
+        ref_map: dict[int, str] = {}
         for i, obj in enumerate(memory_objects):
             local_idx = start_index + i
             line = DenseSerializer.format(obj, local_index=local_idx)

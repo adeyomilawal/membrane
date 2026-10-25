@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any
 
 from membrane.memory_protocol import KernelMemoryObject
 
@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - exercised only without the extra
     _HAS_LLAMA_INDEX = False
     BaseNodePostprocessor = object  # type: ignore[assignment,misc]
 
-    def PrivateAttr(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]  # noqa: N802
+    def PrivateAttr(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
         return None
 
 
@@ -70,7 +70,7 @@ class MembraneNodePostprocessor(BaseNodePostprocessor):  # type: ignore[misc,val
     def class_name(cls) -> str:
         return "MembraneNodePostprocessor"
 
-    def _postprocess_nodes(self, nodes: List[Any], query_bundle: Any = None) -> List[Any]:
+    def _postprocess_nodes(self, nodes: list[Any], query_bundle: Any = None) -> list[Any]:
         memories = [node_to_memory(n) for n in nodes]
         q = ""
         if query_bundle is not None:

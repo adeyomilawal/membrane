@@ -13,7 +13,8 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any
+from collections.abc import Awaitable, Callable, Sequence
 
 import membrane.config as os_config
 from membrane.async_preflight import get_preflight_cache, set_preflight_cache
@@ -47,8 +48,8 @@ logger = logging.getLogger(__name__)
 def _record_jta_lineage_from_compression(
     lineage: Any,
     *,
-    compression_strategy_used: Optional[str],
-    compression_details: Dict[str, Any],
+    compression_strategy_used: str | None,
+    compression_details: dict[str, Any],
     segment_id: str = "middle_compressed",
 ) -> None:
     """Record per-alias substitution events when JTA compression ran."""
@@ -105,7 +106,7 @@ def _record_jta_lineage_from_compression(
         )
 
 
-def _stage(profiler: Optional[LatencyProfiler], name: str):
+def _stage(profiler: LatencyProfiler | None, name: str):
     if profiler is None:
         return contextlib.nullcontext()
     return profiler.stage(name)
@@ -113,13 +114,13 @@ def _stage(profiler: Optional[LatencyProfiler], name: str):
 
 def _build_ranking_diagnostics_for_compile(
     prof: Any,
-    retrieved: List[Tuple[Any, int]],
-    segment_weights: Optional[List[float]],
-    middle_segments: List[Tuple[str, int]],
+    retrieved: list[tuple[Any, int]],
+    segment_weights: list[float] | None,
+    middle_segments: list[tuple[str, int]],
     *,
-    ranking_weights: Optional[Any] = None,
-    include_ranking_diagnostics: Optional[bool] = None,
-) -> Optional[Dict[str, Any]]:
+    ranking_weights: Any | None = None,
+    include_ranking_diagnostics: bool | None = None,
+) -> dict[str, Any] | None:
     """Document-style per-memory scores; pipeline behavior is unchanged."""
     from membrane.ranking_diagnostics import (
         RankingWeights,
@@ -149,11 +150,11 @@ def _build_ranking_diagnostics_for_compile(
 
 
 def _merge_compile_debug_trace(
-    policy_kw: Dict[str, Any],
+    policy_kw: dict[str, Any],
     segment_weights_used: bool,
-    ranking_diag: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    out: Dict[str, Any] = {
+    ranking_diag: dict[str, Any] | None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "policy_kw": {
             k: v
             for k, v in policy_kw.items()
@@ -180,7 +181,7 @@ def _run_trace_exporters(prof: Any, result: CompileResult) -> None:
 
 
 def _emit_compile_metrics(
-    callback: Optional[MetricsCallback],
+    callback: MetricsCallback | None,
     metrics: CompileMetrics,
 ) -> None:
     if callback is None:
@@ -212,20 +213,20 @@ class SecurityFlag(str, Enum):
 
 @dataclass
 class CompileResult:
-    messages: List[Dict[str, Any]]
-    ref_map: Dict[int, str]
-    ref_map_type: Optional[Dict[int, str]] = None
-    system_alerts: List[Dict[str, str]] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    messages: list[dict[str, Any]]
+    ref_map: dict[int, str]
+    ref_map_type: dict[int, str] | None = None
+    system_alerts: list[dict[str, str]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
     # Phase 1 optional attachments
-    debug_trace: Optional[Dict[str, Any]] = None
-    latency_profile: Optional[Any] = None
-    dedup_report: Optional[Any] = None
-    lineage_report: Optional[Any] = None
-    assertion_report: Optional[Any] = None
-    freshness_flags: Optional[List[str]] = None
+    debug_trace: dict[str, Any] | None = None
+    latency_profile: Any | None = None
+    dedup_report: Any | None = None
+    lineage_report: Any | None = None
+    assertion_report: Any | None = None
+    freshness_flags: list[str] | None = None
 
-    def to_debug_dict(self) -> Dict[str, Any]:
+    def to_debug_dict(self) -> dict[str, Any]:
         """Structured snapshot for visualizer / export."""
         return {
             "messages": self.messages,
@@ -247,7 +248,7 @@ class CompileResult:
             ),
         }
 
-    def diff(self, other: "CompileResult") -> Any:
+    def diff(self, other: CompileResult) -> Any:
         raise FeatureNotAvailable("CompileResult.diff")
 
     def explain(self, segment_id: str) -> str:
@@ -276,8 +277,8 @@ class CompileQuote:
     segments_offered: int
     segments_kept: int
     tokens_budget: int
-    estimated_cost_usd: Optional[float]
-    trimming_strategies: List[str]
+    estimated_cost_usd: float | None
+    trimming_strategies: list[str]
     compile_result: CompileResult
 
 
@@ -287,10 +288,10 @@ def _build_trimming_strategies(
     tokens_trimmed: int,
     trimmed_count: int,
     tokens_budget: int,
-    target_token_budget: Optional[int],
-) -> List[str]:
+    target_token_budget: int | None,
+) -> list[str]:
     """Deterministic suggestions; structural checks only (no content safety)."""
-    out: List[str] = []
+    out: list[str] = []
     if tokens_trimmed > 0 and trimmed_count > 0:
         out.append(
             f"Firewall dropped {trimmed_count} middle segment(s) "
@@ -322,8 +323,8 @@ def _build_trimming_strategies(
 def compile_quote_from_result(
     result: CompileResult,
     *,
-    price_per_1k_input_tokens: Optional[float] = None,
-    target_token_budget: Optional[int] = None,
+    price_per_1k_input_tokens: float | None = None,
+    target_token_budget: int | None = None,
     compiler_max_tokens: int = 0,
 ) -> CompileQuote:
     """
@@ -339,7 +340,7 @@ def compile_quote_from_result(
     segments_kept = int(md.get("segments_kept", 0))
     trimmed_count = max(0, segments_offered - segments_kept)
 
-    cost: Optional[float] = None
+    cost: float | None = None
     if price_per_1k_input_tokens is not None:
         if price_per_1k_input_tokens < 0:
             raise ValueError("price_per_1k_input_tokens must be non-negative")
@@ -366,7 +367,7 @@ def compile_quote_from_result(
     )
 
 
-def _last_turn_from_messages(messages: List[Dict[str, Any]]) -> Optional[str]:
+def _last_turn_from_messages(messages: list[dict[str, Any]]) -> str | None:
     for m in reversed(messages):
         if m.get("role") == "assistant":
             content = m.get("stage3_synthesis") or m.get("content") or m.get("stage3")
@@ -377,8 +378,8 @@ def _last_turn_from_messages(messages: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
-def _last_user_messages(messages: List[Dict[str, Any]], cap: int = 3) -> List[str]:
-    user_contents: List[str] = []
+def _last_user_messages(messages: list[dict[str, Any]], cap: int = 3) -> list[str]:
+    user_contents: list[str] = []
     for m in messages:
         if m.get("role") == "user":
             content = m.get("content") or ""
@@ -392,7 +393,7 @@ def _last_user_messages(messages: List[Dict[str, Any]], cap: int = 3) -> List[st
 _INTERNAL_MESSAGE_KEYS = ("stage3", "stage3_synthesis")
 
 
-def _normalize_history(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _normalize_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Provider-ready history: shallow copies with every provider key kept as given.
 
     ``tool_calls``, ``tool_call_id``, ``name`` and content-part lists pass through
@@ -400,7 +401,7 @@ def _normalize_history(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ``stage3_synthesis`` used as ``content`` when content is missing. Deterministic, so
     the same history always serializes to the same bytes.
     """
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for m in messages:
         msg = {k: v for k, v in m.items() if k not in _INTERNAL_MESSAGE_KEYS}
         msg.setdefault("role", "user")
@@ -415,7 +416,7 @@ def _normalize_history(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
-def _message_text(message: Dict[str, Any]) -> str:
+def _message_text(message: dict[str, Any]) -> str:
     """Text used for token counting of a history message."""
     content = message.get("content")
     if isinstance(content, str):
@@ -430,8 +431,8 @@ def _message_text(message: Dict[str, Any]) -> str:
     return text
 
 
-def _flatten_messages_for_display(messages: List[Dict[str, Any]]) -> str:
-    lines: List[str] = []
+def _flatten_messages_for_display(messages: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
     for m in messages:
         role = m.get("role", "unknown")
         content = m.get("content") or m.get("stage3_synthesis") or ""
@@ -457,7 +458,7 @@ def _build_retrieval_summary(
             topic = topic + "…"
     else:
         topic = "your query"
-    parts: List[str] = []
+    parts: list[str] = []
     if n_episodic:
         parts.append(f"{n_episodic} episode{'s' if n_episodic != 1 else ''}")
     if n_semantic:
@@ -483,19 +484,19 @@ def _tier_for_object(obj: Any) -> int:
 
 
 def _stale_survivor_memory_ids(
-    retrieved: List[Tuple[Any, int]],
-    ref_map_kept: Dict[int, str],
-) -> List[str]:
+    retrieved: list[tuple[Any, int]],
+    ref_map_kept: dict[int, str],
+) -> list[str]:
     """
     After the firewall, ``ref_map_kept`` maps local [Mem:N] indices to global memory ids.
     Return ids for kept refs whose source objects were marked ``_membrane_is_stale`` by
     :class:`~membrane.freshness.manager.FreshnessManager`.
     """
-    id_to_obj: Dict[str, Any] = {}
+    id_to_obj: dict[str, Any] = {}
     for i, (obj, _) in enumerate(retrieved):
         mid = str(getattr(obj, "id", f"seg_{i}"))
         id_to_obj[mid] = obj
-    survivors: List[str] = []
+    survivors: list[str] = []
     for mid in sorted(set(ref_map_kept.values())):
         obj = id_to_obj.get(mid)
         if obj is not None and bool(getattr(obj, "_membrane_is_stale", False)):
@@ -509,17 +510,17 @@ LOD_FOCUS_PROCEDURAL = 1
 
 
 def _lod_focus_merge(
-    main_retrieved: List[Tuple[Any, int]],
-    focus_retrieved: List[Tuple[Any, int]],
-) -> List[Tuple[Any, int]]:
+    main_retrieved: list[tuple[Any, int]],
+    focus_retrieved: list[tuple[Any, int]],
+) -> list[tuple[Any, int]]:
     caps = {
         TIER_PROCEDURAL: LOD_FOCUS_PROCEDURAL,
         TIER_SEMANTIC: LOD_FOCUS_SEMANTIC,
         TIER_EPISODIC: LOD_FOCUS_EPISODIC,
     }
     counts = {TIER_PROCEDURAL: 0, TIER_SEMANTIC: 0, TIER_EPISODIC: 0}
-    focus_list: List[Tuple[Any, int]] = []
-    seen_ids: Set[Any] = set()
+    focus_list: list[tuple[Any, int]] = []
+    seen_ids: set[Any] = set()
     for obj, tier in focus_retrieved:
         if tier not in caps:
             continue
@@ -543,15 +544,15 @@ _KIND_TIER = {
 }
 
 
-def _policy_disabled_features(policy_kw: Dict[str, Any]) -> List[str]:
+def _policy_disabled_features(policy_kw: dict[str, Any]) -> list[str]:
     """Features disabled by policies, minus any a policy re-enabled."""
     enabled = set(policy_kw.get("policy_enable") or [])
     return [f for f in (policy_kw.get("policy_disable") or []) if f not in enabled]
 
 
 def _policy_tier_settings(
-    policy_kw: Dict[str, Any],
-) -> Tuple[Optional[Dict[int, float]], Optional[Set[int]]]:
+    policy_kw: dict[str, Any],
+) -> tuple[dict[int, float] | None, set[int] | None]:
     """``set_budget`` kind shares and ``pin_memory_kind`` kinds, as firewall tiers."""
     shares = {
         _KIND_TIER[k]: float(v)
@@ -587,11 +588,11 @@ class ContextCompiler:
     """
 
     max_tokens: int
-    model_id: Optional[str] = None
+    model_id: str | None = None
     core_content: str = ""
     include_interrupt_instruction: bool = True
-    preflight_analyst_model: Optional[str] = None
-    metrics_callback: Optional[MetricsCallback] = None
+    preflight_analyst_model: str | None = None
+    metrics_callback: MetricsCallback | None = None
     memory_placement: str = MEMORY_PLACEMENT_SYSTEM
 
     def __post_init__(self) -> None:
@@ -606,18 +607,18 @@ class ContextCompiler:
         *,
         layout: ContextLayoutEngine,
         core_text: str,
-        middle_segments: List[Tuple[str, int]],
-        ref_map: Dict[int, str],
-        segment_weights: Optional[List[float]],
-        conversation_messages: List[Dict[str, Any]],
-        last_assistant_turn: Optional[str],
+        middle_segments: list[tuple[str, int]],
+        ref_map: dict[int, str],
+        segment_weights: list[float] | None,
+        conversation_messages: list[dict[str, Any]],
+        last_assistant_turn: str | None,
         user_message: str,
         max_tok: int,
         use_split: bool,
         count_fn: Callable[[str], int],
-        tier_shares: Optional[Dict[int, float]] = None,
-        pinned_tiers: Optional[Set[int]] = None,
-    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[int, str], int, Dict[str, Any]]:
+        tier_shares: dict[int, float] | None = None,
+        pinned_tiers: set[int] | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[int, str], int, dict[str, Any]]:
         """Build end block, trim the middle under ``max_tok``, and format provider messages.
 
         ``memory_placement="system"``: one system message (core, memories, end, directives).
@@ -681,7 +682,7 @@ class ContextCompiler:
         messages.append({"role": "user", "content": tail})
         prefix_tokens = count_fn(core_text) + sum(count_fn(_message_text(m)) for m in history)
         tail_tokens = count_fn(tail)
-        cache_meta: Dict[str, Any] = {
+        cache_meta: dict[str, Any] = {
             "memory_placement": MEMORY_PLACEMENT_END,
             "stable_prefix_messages": len(system) + len(history),
         }
@@ -702,7 +703,7 @@ class ContextCompiler:
             )
         return messages, cache_meta, ref_map_kept, prefix_tokens + tail_tokens, fw_stats
 
-    def _policy_max_tokens(self, policy_kw: Dict[str, Any]) -> int:
+    def _policy_max_tokens(self, policy_kw: dict[str, Any]) -> int:
         """Budget after policies: ``set_max_tokens`` / ``override.max_tokens`` replace it,
         bounded by the model's context cap when the model is known."""
         policy_max = policy_kw.get("policy_max_tokens")
@@ -726,8 +727,8 @@ class ContextCompiler:
         *,
         memories: Sequence[Any],
         user_message: str,
-        price_per_1k_input_tokens: Optional[float] = None,
-        target_token_budget: Optional[int] = None,
+        price_per_1k_input_tokens: float | None = None,
+        target_token_budget: int | None = None,
         **kwargs: Any,
     ) -> CompileQuote:
         """
@@ -754,8 +755,8 @@ class ContextCompiler:
         *,
         memories: Sequence[Any],
         user_message: str,
-        price_per_1k_input_tokens: Optional[float] = None,
-        target_token_budget: Optional[int] = None,
+        price_per_1k_input_tokens: float | None = None,
+        target_token_budget: int | None = None,
         **kwargs: Any,
     ) -> CompileQuote:
         """Async counterpart to :meth:`estimate`; delegates to :meth:`compile_async`."""
@@ -776,13 +777,13 @@ class ContextCompiler:
         *,
         memories: Sequence[Any],
         user_message: str,
-        last_assistant_turn: Optional[str] = None,
-        conversation_messages: Optional[List[Dict[str, Any]]] = None,
-        agent_persona_prompt: Optional[str] = None,
-        dynamic_directives: Optional[Sequence[str]] = None,
-        middle_extras: Optional[Sequence[Tuple[str, int]]] = None,
-        compress_sync: Optional[Callable[[str, int, str], str]] = None,
-        tier_by_memory_id: Optional[Dict[int, int]] = None,
+        last_assistant_turn: str | None = None,
+        conversation_messages: list[dict[str, Any]] | None = None,
+        agent_persona_prompt: str | None = None,
+        dynamic_directives: Sequence[str] | None = None,
+        middle_extras: Sequence[tuple[str, int]] | None = None,
+        compress_sync: Callable[[str, int, str], str] | None = None,
+        tier_by_memory_id: dict[int, int] | None = None,
         use_prompt_caching_split: bool = True,
         profile: Any = None,
         reranker: Any = None,
@@ -796,13 +797,13 @@ class ContextCompiler:
         assertions: Any = None,
         recorder: Any = None,
         tokenizer_registry: Any = None,
-        trace_exporters: Optional[List[Any]] = None,
-        enable_lineage: Optional[bool] = None,
-        enable_profiler: Optional[bool] = None,
+        trace_exporters: list[Any] | None = None,
+        enable_lineage: bool | None = None,
+        enable_profiler: bool | None = None,
         metrics_collector: Any = None,
         lineage_tracker: Any = None,
         ranking_weights: Any = None,
-        include_ranking_diagnostics: Optional[bool] = None,
+        include_ranking_diagnostics: bool | None = None,
     ) -> CompileResult:
         """Synchronous compile: optional sync ``compress_sync`` for sacrifice zone; optional modules via ``profile``.
 
@@ -835,8 +836,8 @@ class ContextCompiler:
 
         memories = normalize_compile_memories(memories)
 
-        latency_prof: Optional[Any] = None
-        profiler: Optional[LatencyProfiler] = None
+        latency_prof: Any | None = None
+        profiler: LatencyProfiler | None = None
         if prof.enable_profiler:
             profiler = LatencyProfiler()
             profiler.start_total()
@@ -851,7 +852,7 @@ class ContextCompiler:
                     pass
             return count_tokens(text)
 
-        policy_kw: Dict[str, Any] = {
+        policy_kw: dict[str, Any] = {
             "max_tokens": self.max_tokens,
             "model_id": self.model_id,
         }
@@ -869,7 +870,7 @@ class ContextCompiler:
         tier_shares, pinned_tiers = _policy_tier_settings(policy_kw)
         max_tok = self._policy_max_tokens(policy_kw)
 
-        mems: List[Any] = list(memories)
+        mems: list[Any] = list(memories)
         dedup_res = None
         lineage = prof.lineage_tracker
         if prof.enable_lineage and lineage is None:
@@ -906,7 +907,7 @@ class ContextCompiler:
             ]
         else:
             retrieved = [(m, _tier_for_object(m)) for m in mems]
-        segment_weights: Optional[List[float]] = None
+        segment_weights: list[float] | None = None
         if (
             prof.reranker is not None
             and not policy_feature_disabled(policy_disable, "reranker")
@@ -961,9 +962,9 @@ class ContextCompiler:
         target_tokens = os_config.get_preflight_target_tokens()
         raw_middle_text = "\n\n".join(seg[0] for seg in middle_segments)
         middle_tokens = _count_ctx(raw_middle_text)
-        compression_strategy_used: Optional[str] = None
-        compressed_middle: Optional[str] = None
-        compression_details: Dict[str, Any] = {}
+        compression_strategy_used: str | None = None
+        compressed_middle: str | None = None
+        compression_details: dict[str, Any] = {}
         compression_token_delta: int = 0
 
         if (
@@ -1047,7 +1048,7 @@ class ContextCompiler:
             ref_map_kept = _ref_map_from_text(compressed_middle, ref_map)
         stale_survivors = _stale_survivor_memory_ids(list(retrieved), ref_map_kept)
 
-        ref_map_type_kept: Dict[int, str] = {}
+        ref_map_type_kept: dict[int, str] = {}
         if ref_map_type:
             for k in ref_map_kept:
                 if k in ref_map_type:
@@ -1131,7 +1132,7 @@ class ContextCompiler:
             except Exception as exc:
                 logger.debug("recorder.record failed: %s", exc)
 
-        metrics_extra: Dict[str, Any] = {}
+        metrics_extra: dict[str, Any] = {}
         if result.assertion_report is not None:
             metrics_extra["assertions_passed"] = getattr(
                 result.assertion_report, "passed", None
@@ -1176,16 +1177,16 @@ class ContextCompiler:
         *,
         memories: Sequence[Any],
         user_message: str,
-        last_assistant_turn: Optional[str] = None,
-        conversation_messages: Optional[List[Dict[str, Any]]] = None,
-        agent_persona_prompt: Optional[str] = None,
-        dynamic_directives: Optional[Sequence[str]] = None,
-        middle_extras: Optional[Sequence[Tuple[str, int]]] = None,
-        compress_async: Optional[Callable[[str, int, str], Awaitable[str]]] = None,
-        compress_sync: Optional[Callable[[str, int, str], str]] = None,
-        redis_client: Optional[Any] = None,
-        conversation_id: Optional[str] = None,
-        tier_by_memory_id: Optional[Dict[int, int]] = None,
+        last_assistant_turn: str | None = None,
+        conversation_messages: list[dict[str, Any]] | None = None,
+        agent_persona_prompt: str | None = None,
+        dynamic_directives: Sequence[str] | None = None,
+        middle_extras: Sequence[tuple[str, int]] | None = None,
+        compress_async: Callable[[str, int, str], Awaitable[str]] | None = None,
+        compress_sync: Callable[[str, int, str], str] | None = None,
+        redis_client: Any | None = None,
+        conversation_id: str | None = None,
+        tier_by_memory_id: dict[int, int] | None = None,
         use_prompt_caching_split: bool = True,
         profile: Any = None,
         reranker: Any = None,
@@ -1199,13 +1200,13 @@ class ContextCompiler:
         assertions: Any = None,
         recorder: Any = None,
         tokenizer_registry: Any = None,
-        trace_exporters: Optional[List[Any]] = None,
-        enable_lineage: Optional[bool] = None,
-        enable_profiler: Optional[bool] = None,
+        trace_exporters: list[Any] | None = None,
+        enable_lineage: bool | None = None,
+        enable_profiler: bool | None = None,
         metrics_collector: Any = None,
         lineage_tracker: Any = None,
         ranking_weights: Any = None,
-        include_ranking_diagnostics: Optional[bool] = None,
+        include_ranking_diagnostics: bool | None = None,
     ) -> CompileResult:
         """
         Async compile with optional ``compress_async`` and/or Redis pre-flight cache.
@@ -1270,8 +1271,8 @@ class ContextCompiler:
 
         memories = normalize_compile_memories(memories)
 
-        latency_prof: Optional[Any] = None
-        profiler: Optional[LatencyProfiler] = None
+        latency_prof: Any | None = None
+        profiler: LatencyProfiler | None = None
         if prof.enable_profiler:
             profiler = LatencyProfiler()
             profiler.start_total()
@@ -1286,7 +1287,7 @@ class ContextCompiler:
                     pass
             return count_tokens(text)
 
-        policy_kw: Dict[str, Any] = {
+        policy_kw: dict[str, Any] = {
             "max_tokens": self.max_tokens,
             "model_id": self.model_id,
         }
@@ -1304,7 +1305,7 @@ class ContextCompiler:
         tier_shares, pinned_tiers = _policy_tier_settings(policy_kw)
         max_tok = self._policy_max_tokens(policy_kw)
 
-        mems: List[Any] = list(memories)
+        mems: list[Any] = list(memories)
         dedup_res = None
         lineage = prof.lineage_tracker
         if prof.enable_lineage and lineage is None:
@@ -1342,7 +1343,7 @@ class ContextCompiler:
         else:
             retrieved = [(m, _tier_for_object(m)) for m in mems]
 
-        segment_weights: Optional[List[float]] = None
+        segment_weights: list[float] | None = None
         if (
             prof.reranker is not None
             and not policy_feature_disabled(policy_disable, "reranker")
@@ -1397,9 +1398,9 @@ class ContextCompiler:
         target_tokens = os_config.get_preflight_target_tokens()
         raw_middle_text = "\n\n".join(seg[0] for seg in middle_segments)
         middle_tokens = _count_ctx(raw_middle_text)
-        compression_strategy_used: Optional[str] = None
-        compressed_middle: Optional[str] = None
-        compression_details: Dict[str, Any] = {}
+        compression_strategy_used: str | None = None
+        compressed_middle: str | None = None
+        compression_details: dict[str, Any] = {}
         compression_token_delta: int = 0
 
         if (
@@ -1440,7 +1441,7 @@ class ContextCompiler:
                 )
 
         if middle_tokens > threshold and raw_middle_text.strip():
-            compressed: Optional[str] = None
+            compressed: str | None = None
             if redis_client and conversation_id:
                 try:
                     compressed = await get_preflight_cache(
@@ -1512,7 +1513,7 @@ class ContextCompiler:
             ref_map_kept = _ref_map_from_text(compressed_middle, ref_map)
         stale_survivors = _stale_survivor_memory_ids(list(retrieved), ref_map_kept)
 
-        ref_map_type_kept: Dict[int, str] = {}
+        ref_map_type_kept: dict[int, str] = {}
         if ref_map_type:
             for k in ref_map_kept:
                 if k in ref_map_type:
@@ -1596,7 +1597,7 @@ class ContextCompiler:
             except Exception as exc:
                 logger.debug("recorder.record failed: %s", exc)
 
-        metrics_extra: Dict[str, Any] = {}
+        metrics_extra: dict[str, Any] = {}
         if result.assertion_report is not None:
             metrics_extra["assertions_passed"] = getattr(
                 result.assertion_report, "passed", None
@@ -1654,18 +1655,18 @@ MIN_CACHEABLE_PREFIX_TOKENS = 1024
 
 
 def _build_output_messages(
-    model_id: Optional[str],
+    model_id: str | None,
     final_text: str,
     use_split: bool,
     prefix_text: str = "",
-) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """One system message; report the byte-stable prefix (``prefix_text``) when it is cacheable.
 
     ``cacheable_prefix_chars`` lets callers split the content for explicit cache markers
     (for example :func:`membrane.cache_format.anthropic_system_blocks`).
     """
-    cache_meta: Dict[str, Any] = {}
-    messages: List[Dict[str, Any]] = [{"role": "system", "content": final_text}]
+    cache_meta: dict[str, Any] = {}
+    messages: list[dict[str, Any]] = [{"role": "system", "content": final_text}]
     if not (model_id and use_split and has_prompt_caching(model_id)):
         return messages, cache_meta
     prefix = prefix_text if prefix_text.strip() and final_text.startswith(prefix_text) else ""
@@ -1683,13 +1684,13 @@ def _build_output_messages(
 def compile_anonymous(
     *,
     user_message: str,
-    conversation_messages: List[Dict[str, Any]],
+    conversation_messages: list[dict[str, Any]],
     max_tokens: int,
-    model_id: Optional[str] = None,
+    model_id: str | None = None,
     core_content: str = "",
-    agent_persona_prompt: Optional[str] = None,
+    agent_persona_prompt: str | None = None,
     use_prompt_caching_split: bool = True,
-    metrics_callback: Optional[MetricsCallback] = None,
+    metrics_callback: MetricsCallback | None = None,
 ) -> CompileResult:
     """No long-term memory: core + conversation + user; firewall if over cap."""
     t0 = time.perf_counter()
@@ -1711,7 +1712,7 @@ def compile_anonymous(
         end_text = "--- Recent conversation ---\n" + raw_history + "\n\n" + end_text
     full = core_text + "\n\n" + end_text
     total = count_tokens(full)
-    fw_stats: Dict[str, Any] = {
+    fw_stats: dict[str, Any] = {
         "segments_offered": 0,
         "segments_kept": 0,
         "tokens_trimmed": 0,
@@ -1779,24 +1780,24 @@ def compile_anonymous(
 async def compile_prompt_async(
     *,
     user_msg: str,
-    messages_list: List[Dict[str, Any]],
-    user_id: Optional[str],
+    messages_list: list[dict[str, Any]],
+    user_id: str | None,
     max_tokens: int,
-    model_id: Optional[str] = None,
+    model_id: str | None = None,
     core_content: str = "",
-    agent_persona_prompt: Optional[str] = None,
-    dynamic_directives: Optional[Sequence[str]] = None,
-    retrieved_objects: Optional[List[Tuple[Any, int]]] = None,
-    current_stress: Optional[float] = None,
-    redis_client: Optional[Any] = None,
-    conversation_id: Optional[str] = None,
-    compress_fn: Optional[Callable[[str, int, str], Awaitable[str]]] = None,
-    middle_segments_prefix: Optional[List[Tuple[str, int]]] = None,
-    lod_focus_retrieve: Optional[Callable[[], Awaitable[List[Tuple[Any, int]]]]] = None,
+    agent_persona_prompt: str | None = None,
+    dynamic_directives: Sequence[str] | None = None,
+    retrieved_objects: list[tuple[Any, int]] | None = None,
+    current_stress: float | None = None,
+    redis_client: Any | None = None,
+    conversation_id: str | None = None,
+    compress_fn: Callable[[str, int, str], Awaitable[str]] | None = None,
+    middle_segments_prefix: list[tuple[str, int]] | None = None,
+    lod_focus_retrieve: Callable[[], Awaitable[list[tuple[Any, int]]]] | None = None,
     persist_ref_map_to_redis: bool = False,
-    redis_url_for_ref_map: Optional[str] = None,
+    redis_url_for_ref_map: str | None = None,
     use_prompt_caching_split: bool = True,
-    metrics_callback: Optional[MetricsCallback] = None,
+    metrics_callback: MetricsCallback | None = None,
     memory_placement: str = MEMORY_PLACEMENT_SYSTEM,
     profile: Any = None,
     reranker: Any = None,
@@ -1810,9 +1811,9 @@ async def compile_prompt_async(
     assertions: Any = None,
     recorder: Any = None,
     tokenizer_registry: Any = None,
-    trace_exporters: Optional[List[Any]] = None,
-    enable_lineage: Optional[bool] = None,
-    enable_profiler: Optional[bool] = None,
+    trace_exporters: list[Any] | None = None,
+    enable_lineage: bool | None = None,
+    enable_profiler: bool | None = None,
     metrics_collector: Any = None,
     lineage_tracker: Any = None,
 ) -> CompileResult:
@@ -1854,7 +1855,7 @@ async def compile_prompt_async(
 
     attention_shift = compute_attention_shift(_last_user_messages(messages_list), user_msg)
 
-    retrieved: List[Tuple[Any, int]] = list(retrieved_objects or [])
+    retrieved: list[tuple[Any, int]] = list(retrieved_objects or [])
     if attention_shift and lod_focus_retrieve and retrieved:
         try:
             focus_list = await lod_focus_retrieve()
@@ -1864,7 +1865,7 @@ async def compile_prompt_async(
             logger.debug("LOD focus retrieval failed: %s", e)
 
     memories = [o for o, _ in retrieved]
-    tier_by_memory_id: Optional[Dict[int, int]] = (
+    tier_by_memory_id: dict[int, int] | None = (
         {id(o): t for o, t in retrieved} if retrieved else None
     )
 

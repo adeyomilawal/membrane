@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from membrane.templates.types import ParsedDocument
 
@@ -25,8 +25,8 @@ class Token:
     value: str = ""
 
 
-def tokenize(source: str) -> List[Token]:
-    out: List[Token] = []
+def tokenize(source: str) -> list[Token]:
+    out: list[Token] = []
     i = 0
     n = len(source)
     while i < n:
@@ -58,17 +58,17 @@ def tokenize(source: str) -> List[Token]:
     return out
 
 
-def _extends_name(tag: str) -> Optional[str]:
+def _extends_name(tag: str) -> str | None:
     m = _EXTENDS_RE.match(tag.strip())
     if not m:
         return None
     return m.group(1) or m.group(2) or m.group(3)
 
 
-def parse_nodes(tokens: List[Token], pos: list, end_pred) -> List[Any]:
+def parse_nodes(tokens: list[Token], pos: list, end_pred) -> list[Any]:
     from membrane.templates.types import BlockNode, ForNode, IfNode, RoleBlockNode, TextNode, VarNode
 
-    nodes: List[Any] = []
+    nodes: list[Any] = []
     while pos[0] < len(tokens):
         t = tokens[pos[0]]
         if t.kind == TokType.EOF:
@@ -151,7 +151,7 @@ def parse_document(source: str) -> ParsedDocument:
         ext = _extends_name(toks[pos[0]].value)
         if ext:
             pos[0] += 1
-            overrides: Dict[str, List[Any]] = {}
+            overrides: dict[str, list[Any]] = {}
 
             while pos[0] < len(toks) and toks[pos[0]].kind != TokType.EOF:
                 tt = toks[pos[0]]
@@ -182,7 +182,7 @@ def parse_document(source: str) -> ParsedDocument:
     return ParsedDocument(nodes=body)
 
 
-def parse_template(source: str) -> List[Any]:
+def parse_template(source: str) -> list[Any]:
     doc = parse_document(source)
     if doc.extends_parent:
         raise ValueError(

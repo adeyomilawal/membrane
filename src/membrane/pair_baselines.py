@@ -10,7 +10,7 @@ skip segment if larger than remaining budget).
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
 
 from membrane.firewall import (
     TIER_PROCEDURAL,
@@ -21,8 +21,8 @@ from membrane.firewall import (
 )
 
 
-def _ref_submap_from_text(text: str, ref_map: Dict[int, str]) -> Dict[int, str]:
-    out: Dict[int, str] = {}
+def _ref_submap_from_text(text: str, ref_map: dict[int, str]) -> dict[int, str]:
+    out: dict[int, str] = {}
     for idx, _ in _extract_mem_refs(text):
         if idx in ref_map:
             out[idx] = ref_map[idx]
@@ -32,12 +32,12 @@ def _ref_submap_from_text(text: str, ref_map: Dict[int, str]) -> Dict[int, str]:
 def pack_middle_order(
     core_text: str,
     end_text: str,
-    middle_segments: Sequence[Tuple[str, int]],
+    middle_segments: Sequence[tuple[str, int]],
     max_tokens: int,
     *,
     order: str,
-    ref_map: Optional[Dict[int, str]] = None,
-) -> Tuple[str, Dict[int, str], int]:
+    ref_map: dict[int, str] | None = None,
+) -> tuple[str, dict[int, str], int]:
     """
     Pack middle into core + middle + end under ``max_tokens``.
 
@@ -69,8 +69,8 @@ def pack_middle_order(
 
     budget = max_tokens - reserved
     procedural_count = 0
-    kept: List[str] = []
-    kept_refs: Dict[int, str] = {}
+    kept: list[str] = []
+    kept_refs: dict[int, str] = {}
 
     for seg_text, tier in segs:
         seg_tok = count_tokens(seg_text)
@@ -115,9 +115,9 @@ def tier_vs_fifo_demo_segments(
     semantic_lines: int = 4,
     semantic_tokens_each: int = 50,
     procedural_markers: Sequence[str] = ("MARK_PROC_0", "MARK_PROC_1", "MARK_PROC_2"),
-) -> Tuple[str, str, List[Tuple[str, int]], Dict[int, str], List[str], int]:
+) -> tuple[str, str, list[tuple[str, int]], dict[int, str], list[str], int]:
     """Build core/end/segments/ref_map/markers/cap for the procedural-vs-FIFO regression fixture."""
-    middle: List[Tuple[str, int]] = []
+    middle: list[tuple[str, int]] = []
     for i in range(semantic_lines):
         prefix = f"[Mem:{i + 1}] MARK_SEM_{i} "
         middle.append((prefix + pad_prefix_to_token_count(prefix, semantic_tokens_each), TIER_SEMANTIC))
@@ -133,7 +133,7 @@ def tier_vs_fifo_demo_segments(
     return core, end, middle, ref_map, markers, cap
 
 
-def marker_survival_score(markers: Sequence[str], text: str) -> Tuple[int, List[str]]:
+def marker_survival_score(markers: Sequence[str], text: str) -> tuple[int, list[str]]:
     """Return (count_present, list of markers missing from text)."""
     missing = [m for m in markers if m not in text]
     return len(markers) - len(missing), missing
@@ -142,11 +142,11 @@ def marker_survival_score(markers: Sequence[str], text: str) -> Tuple[int, List[
 def procedural_recall_vs_fifo(
     core_text: str,
     end_text: str,
-    middle_segments: Sequence[Tuple[str, int]],
+    middle_segments: Sequence[tuple[str, int]],
     max_tokens: int,
     must_keep_markers: Sequence[str],
-    ref_map: Optional[Dict[int, str]] = None,
-) -> Dict[str, object]:
+    ref_map: dict[int, str] | None = None,
+) -> dict[str, object]:
     """Compare tier-aware firewall vs naive FIFO on the same segments and budget."""
     final_tier, _, tok_tier = pack_middle_order(
         core_text, end_text, middle_segments, max_tokens, order="tier", ref_map=ref_map

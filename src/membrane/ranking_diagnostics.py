@@ -19,7 +19,8 @@ These values explain *why* segments were ordered; they do not replace firewall l
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Sequence
 
 from membrane.firewall import TIER_EPISODIC, TIER_PROCEDURAL, TIER_SEMANTIC
 
@@ -44,7 +45,7 @@ def tier_priority_01(tier: int) -> float:
     return 0.0
 
 
-def _normalize_relevance(raw: Optional[Sequence[float]], n: int) -> List[float]:
+def _normalize_relevance(raw: Sequence[float] | None, n: int) -> list[float]:
     if raw is None or len(raw) != n or n == 0:
         return [0.5] * n
     vals = [float(x) for x in raw]
@@ -67,11 +68,11 @@ def _age_decay_term(obj: Any) -> float:
 
 
 def compute_ranking_diagnostics(
-    retrieved: Sequence[Tuple[Any, int]],
+    retrieved: Sequence[tuple[Any, int]],
     *,
-    segment_weights: Optional[Sequence[float]] = None,
-    weights: Optional[RankingWeights] = None,
-) -> Dict[str, Any]:
+    segment_weights: Sequence[float] | None = None,
+    weights: RankingWeights | None = None,
+) -> dict[str, Any]:
     """
     Build per-memory diagnostic rows and metadata.
 
@@ -81,7 +82,7 @@ def compute_ranking_diagnostics(
     rw = weights or RankingWeights()
     n = len(retrieved)
     rel = _normalize_relevance(segment_weights, n)
-    segments: List[Dict[str, Any]] = []
+    segments: list[dict[str, Any]] = []
     for i, (obj, tier) in enumerate(retrieved):
         r = rel[i]
         tp = tier_priority_01(tier)
@@ -124,7 +125,7 @@ def compute_ranking_diagnostics(
 
 def firewall_weights_aligned(
     middle_segment_count: int,
-    segment_weights: Optional[Sequence[float]],
+    segment_weights: Sequence[float] | None,
 ) -> bool:
     """Whether rerank weights apply to firewall ordering (same length as middle segments)."""
     if not segment_weights:

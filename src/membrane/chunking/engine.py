@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, List, Optional
+from typing import Any
+from collections.abc import Callable
 
 from membrane.chunking.strategies import Chunk
 
@@ -12,8 +13,8 @@ class ChunkingEngine:
         self,
         strategy: Any,
         *,
-        tokenizer: Optional[Callable[[str], int]] = None,
-        model_id: Optional[str] = None,
+        tokenizer: Callable[[str], int] | None = None,
+        model_id: str | None = None,
     ) -> None:
         self._strategy = strategy
         self._tokenizer = tokenizer
@@ -25,7 +26,7 @@ class ChunkingEngine:
         *,
         max_tokens: int = 512,
         overlap_tokens: int = 50,
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         tok = self._tokenizer
         if tok is None and self._model_id:
             try:
@@ -45,9 +46,9 @@ class ChunkingEngine:
 
     def chunk_batch(
         self,
-        texts: List[str],
+        texts: list[str],
         *,
         max_tokens: int = 512,
         overlap_tokens: int = 50,
-    ) -> List[List[Chunk]]:
+    ) -> list[list[Chunk]]:
         return [self.chunk(t, max_tokens=max_tokens, overlap_tokens=overlap_tokens) for t in texts]

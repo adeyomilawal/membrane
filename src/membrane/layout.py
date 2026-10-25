@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Sequence
 
 from membrane.memory_protocol import infer_memory_kind
 from membrane.serializers import DenseSerializer
@@ -16,8 +17,8 @@ class ContextLayoutEngine:
 
     def __init__(
         self,
-        core_content: Optional[str] = "",
-        system_directives: Optional[str] = None,
+        core_content: str | None = "",
+        system_directives: str | None = None,
     ):
         self.core_content = core_content or ""
         self.system_directives = system_directives or ""
@@ -44,18 +45,18 @@ class ContextLayoutEngine:
 
     def build_middle(
         self,
-        retrieved: Sequence[Tuple[Any, int]],
+        retrieved: Sequence[tuple[Any, int]],
         start_index: int = 1,
-    ) -> Tuple[List[Tuple[str, int]], Dict[int, str], Dict[int, str]]:
+    ) -> tuple[list[tuple[str, int]], dict[int, str], dict[int, str]]:
         """
         Serialize retrieved memories with local [Mem:N] and tier.
 
         Returns:
             (middle_segments, ref_map, ref_map_type).
         """
-        segments: List[Tuple[str, int]] = []
-        ref_map: Dict[int, str] = {}
-        ref_map_type: Dict[int, str] = {}
+        segments: list[tuple[str, int]] = []
+        ref_map: dict[int, str] = {}
+        ref_map_type: dict[int, str] = {}
         self.last_truncated_count = 0
         for i, (obj, tier) in enumerate(retrieved):
             local_idx = start_index + i
@@ -76,7 +77,7 @@ class ContextLayoutEngine:
 
     @staticmethod
     def build_end(
-        last_turn_content: Optional[str],
+        last_turn_content: str | None,
         user_message: str,
     ) -> str:
         """Assemble end block: last turn (if any) + current user message."""
@@ -91,11 +92,11 @@ class ContextLayoutEngine:
 
     def assemble(
         self,
-        core_text: Optional[str] = None,
-        middle_segments: Optional[Sequence[Tuple[str, int]]] = None,
-        end_text: Optional[str] = None,
-        ref_map: Optional[Dict[int, str]] = None,
-    ) -> Tuple[str, Dict[int, str]]:
+        core_text: str | None = None,
+        middle_segments: Sequence[tuple[str, int]] | None = None,
+        end_text: str | None = None,
+        ref_map: dict[int, str] | None = None,
+    ) -> tuple[str, dict[int, str]]:
         """Concatenate core + middle + end (no token cap; use PreFlightContextFirewall)."""
         core = (core_text if core_text is not None else self.build_core()) or ""
         middle_list = list(middle_segments or [])
