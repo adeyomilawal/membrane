@@ -1,6 +1,6 @@
 """Hard benchmark suite: Membrane against real context-management products.
 
-Seven stress scenarios, five seeds each, every strategy fed the same core prompt, retrieved
+Eight stress scenarios, five seeds each, every strategy fed the same core prompt, retrieved
 memories, conversation history and token budget. All offline and deterministic.
 
 Products under test:
@@ -36,6 +36,11 @@ Metrics per scenario:
 - ``cost``: input cost relative to naive = 100, with cache reads at 0.5x and 0.1x.
 - ``recall``: share of questions whose answer is somewhere in the prompt, by where the
   fact lives. An upper bound on accuracy, not accuracy.
+
+Membrane picks which memories and which dropped history to keep partly by the words they
+share with the question. In most scenarios the question names what it asks for ("project
+Atlas", "trip 12"), which helps that. ``paraphrase`` removes the help: its questions share
+no rare word with the facts, so only retrieval rank and recency are left.
 - ``over``: turns over budget before glue. ``invalid``: requests with a tool result
   separated from its call, which providers reject.
 - ``ms``: median build time per turn. The harness pre-counts tokens for naive, LangChain
@@ -81,6 +86,7 @@ class Scenario:
     uniform_rank: bool = False  # the needed memory is equally likely at any rank
     multi: bool = False  # every question needs a memory fact and a history fact
     paste_turns: tuple[int, ...] = ()  # turns where the user pastes a long document
+    paraphrase: bool = False  # questions share no rare word with the fact they ask for
 
 
 SCENARIOS = (
@@ -107,6 +113,10 @@ SCENARIOS = (
     Scenario(
         "tiny", "3,000-token budget, half of it system prompt", 30, 3_000, 8, lookbacks=(2, 5)
     ),
+    Scenario(
+        "paraphrase", "flood, but questions share no wording with the facts", 30, 5_000, 40,
+        lookbacks=(4, 12), paraphrase=True,
+    ),
     Scenario("roomy", "24,000-token budget, nothing needs dropping", 40, 24_000, 8),
 )
 
@@ -118,6 +128,19 @@ class Turn:
     needles: tuple[str, ...]
     kind: str  # memory | history | tool | paste | multi
     memories: list[MemoryItem] = field(default_factory=list)
+
+
+_ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+_ONES += ["eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen"]
+_ONES += ["eighteen", "nineteen"]
+_TENS = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+
+
+def _spell(n: int) -> str:
+    """0-99 in words, so a paraphrased question never repeats a number from the fact."""
+    if n < 20:
+        return _ONES[n]
+    return _TENS[n // 10 - 2] + ("" if n % 10 == 0 else "-" + _ONES[n % 10])
 
 
 def build_scenario(sc: Scenario, seed: int) -> list[Turn]:
@@ -168,6 +191,13 @@ def build_scenario(sc: Scenario, seed: int) -> list[Turn]:
         else:
             ask = f"What is the deploy code for project {target}?"
             needles, kind = (deploy[target],), "memory"
+        if sc.paraphrase:
+            # Same facts, asked in words that appear nowhere in the memory or the history.
+            ask = (
+                f"Which storage combination went with journey {_spell(source)}?"
+                if kind == "history"
+                else f"Which release key belongs to initiative {_spell(PROJECTS.index(target))}?"
+            )
 
         filler = " ".join(f"note{t}-{k}" for k in range(rng.randint(5, 60)))
         user = f"{ask} Context for later: {filler}. My locker code for trip {t} is {locker[t]}."

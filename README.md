@@ -309,9 +309,15 @@ from cache. History may hold `history_share` (default 0.75) of the budget left a
 Past that, the oldest turns are dropped in chunks of half that share
 (`metadata["history_messages_dropped"]`). The cut depends only on the budget and the core, never
 on this turn's memories or question, so it stays put as the chat grows and the cache breaks only
-when another chunk goes. Dropped turns are not lost: the most recently dropped chunk returns in
-the dynamic tail as low-priority recall (`recall_evicted_history`), trimmed before any memory and
-kept out of `ref_map`. Pass `trim_history=False` to manage history yourself. An overrun then sets
+when another chunk goes. Dropped turns are not lost (`recall_evicted_history`): they are split
+into passages of about 60 words, tool results included, and ranked by the rare words they share
+with the current user message, then by recency. The best passages, up to one chunk, return in the
+dynamic tail as low-priority recall, trimmed before any memory and kept out of `ref_map`.
+
+When memories do not all fit, the ones that survive are chosen by reciprocal rank fusion of the
+order you passed (your retriever's rank) and the same lexical relevance (`rank_fusion`). The
+survivors keep your order, so nothing changes when everything fits. Both are word matching, not
+semantic search: they help when the question names what it asks for. Pass `trim_history=False` to manage history yourself. An overrun then sets
 `metadata["budget_exceeded"] = True` instead of dropping turns.
 
 `memory_placement="system"` puts core, memories, the last turn and the user message into a single
@@ -606,7 +612,8 @@ To write the compressor against a class instead of a bare function, implement th
 | `memory_placement` | `"end"` | `"end"` (cache-friendly) or `"system"` (single system message) |
 | `trim_history` | `True` | With end placement, drop the oldest history in chunks when over budget |
 | `history_share` | `0.75` | Share of the budget after the core that history may hold in the cached prefix |
-| `recall_evicted_history` | `True` | Bring the most recently dropped history chunk back as low-priority recall |
+| `recall_evicted_history` | `True` | Bring passages of dropped history back as low-priority recall, picked by relevance to the question, then recency |
+| `rank_fusion` | `True` | When memories must be trimmed, choose survivors by your order fused with lexical relevance to the question |
 | `message_overhead_tokens` | `3` | Tokens billed per message on top of content (OpenAI chat framing), reserved in the budget |
 | `metrics_callback` | `None` | Receives a `CompileMetrics` after each compile (token counts, never prompt text) |
 | `preflight_analyst_model` | `None` | Model hint for your pre-flight compressor |
@@ -768,47 +775,51 @@ Priompt's priority-cutoff search rather than importing the package.
 | **Membrane, defaults** | **58%** | 0 | 100% / 100% | **82 / 63** |
 | Membrane, `memory_placement="system"` | 56% | 0 | 100% / 0% | 41 / 32 |
 
-History recall matched naive at every lookback tested (4 to 22 turns back). Past what the budget
-holds, both lose the fact. Recall costs tokens: with `recall_evicted_history=False` the 6,000-token
-run caches 68% and costs 64 / 43, but finds none of the history facts. With a 12,000-token budget
-Membrane caches 81% and costs 68 / 35. Under memory pressure
-(4,000 tokens, 40 memories) it still costs less (88 / 75), but it keeps fewer memories: 76%
-memory recall against 95% for naive, which makes room by discarding all history. Lower
-`history_share` for memory-heavy apps.
+Recall costs tokens: with `recall_evicted_history=False` the 6,000-token run caches 68% and costs
+64 / 43, but finds none of the history facts. With a 12,000-token budget Membrane caches 81% and
+costs 68 / 35. Under memory pressure (4,000 tokens, 40 memories) it costs 88 / 76 and keeps the
+needed memory every time, against 95% for naive.
 
 ```bash
 python -m benchmarks.peer_comparison [--budget N] [--memories N] [--live]
 ```
 
-**Hard suite** ([`benchmarks/hard_suite.py`](benchmarks/hard_suite.py)): seven stress scenarios,
+**Hard suite** ([`benchmarks/hard_suite.py`](benchmarks/hard_suite.py)): eight stress scenarios,
 5 seeds each, against LangChain `trim_messages`, LlamaIndex `ChatMemoryBuffer` and `Memory`, a
-Priompt-style cutoff and a naive loop. Offline; recall is an upper bound on accuracy. Mean over
-all scenarios (cost relative to naive = 100):
+Priompt-style cutoff and a naive loop. Offline; recall means the answer was in the prompt, an
+upper bound on accuracy. Mean over all scenarios (cost relative to naive = 100):
 
 | | Cost at 0.5× / 0.1× cache reads | Recall | Turns over budget | Invalid tool requests |
 | --- | ---: | ---: | ---: | ---: |
-| Naive loop | 100 / 100 | 93% | 0 | 10 |
-| LangChain `trim_messages` | 98 / 98 | 93% | 0 | 0 |
-| LlamaIndex `ChatMemoryBuffer` | 99 / 98 | 93% | 277 | 0 |
-| LlamaIndex `Memory` | 83 / 81 | 86% | 137 | 0 |
-| Priompt-style cutoff | 99 / 98 | 93% | 0 | 0 |
-| **Membrane, defaults** | **78 / 59** | 90% | 0 | 0 |
-| Membrane, `recall_evicted_history=False` | 67 / 47 | 86% | 0 | 0 |
+| Naive loop | 100 / 100 | 92% | 0 | 10 |
+| LangChain `trim_messages` | 98 / 98 | 92% | 0 | 0 |
+| LlamaIndex `ChatMemoryBuffer` | 99 / 98 | 92% | 289 | 0 |
+| LlamaIndex `Memory` | 85 / 83 | 87% | 239 | 0 |
+| Priompt-style cutoff | 99 / 98 | 92% | 0 | 0 |
+| **Membrane, defaults** | **82 / 65** | **95%** | 0 | 0 |
+| Membrane, `recall_evicted_history=False` | 69 / 50 | 88% | 0 | 0 |
 
-Membrane is cheapest in every scenario. Recall matches the trimming libraries in three (80-turn
-chat, two-fact questions, 24,000-token budget) and is within a point or two under a 3,000-token
-budget. It is behind in three:
+Per scenario, Membrane defaults against the best trimming library:
 
-- **Tool results.** Facts inside old tool results: 58% against 63%, because dropped tool messages
-  are not brought back as recall.
+| Scenario | Membrane recall | Best peer recall | Membrane cost |
+| --- | ---: | ---: | ---: |
+| 80-turn chat, facts asked up to 30 turns later | history 99% | 76% | 76 / 55 |
+| Tool calls, facts in old tool results | tool 73%, history 93% | 65%, 100% | 82 / 65 |
+| Up to 40 memories per turn, needed one at a random rank | memory 100%, history 100% | 100%, 50% | 87 / 72 |
+| Every answer needs a memory fact and a history fact | 98% | 100% | 82 / 64 |
+| Three 2,500-token pastes | paste 76%, history 76% | 60%, 60% | 87 / 78 |
+| 3,000-token budget | history 66% | 54% | 95 / 86 |
+| Memory flood with paraphrased questions | memory 96%, history 56% | 100%, 32% | 87 / 72 |
+| 24,000-token budget | 100% | 100% | 62 / 26 |
 
-- **Long pastes.** A 2,500-token pasted message is dropped from history early and is too big to
-  come back as recall: 8% of paste questions answerable against 60% for the trimming libraries.
-- **Memory floods.** With up to 40 memories per turn Membrane keeps history and drops memories
-  (77% memory recall, 100% history recall); the others do the reverse (100% and 50%).
+Where Membrane is behind: old history facts in the tool scenario (93% against 100%), two-fact
+questions (98%), and memory recall when questions are paraphrased (96%). Membrane picks dropped
+history and surviving memories partly by the words they share with the question; most scenarios
+name what they ask for, which helps that. The paraphrase scenario removes the help.
 
 The peers put retrieved memories in the system message, as their RAG chat patterns do. Moving
-them next to the question by hand gives the same caching in any of them.
+them next to the question by hand gives the same caching in any of them. Compile time is 4 to
+10 ms per turn at these sizes.
 
 ```bash
 uv run --extra langchain --extra llamaindex python -m benchmarks.hard_suite

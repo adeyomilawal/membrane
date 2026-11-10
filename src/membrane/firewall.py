@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import lru_cache
 from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from typing import Any, Literal
@@ -35,6 +36,16 @@ def _get_encoding() -> Any | Literal[False]:
     return _tiktoken_encoding
 
 
+# Chat history is re-counted on every compile; short texts are cached by content.
+_COUNT_CACHE_MAX_CHARS = 8_000
+
+
+@lru_cache(maxsize=4096)
+def _count_exact_cached(text: str) -> int:
+    enc = _get_encoding()
+    return len(enc.encode(text))  # type: ignore[union-attr]
+
+
 def count_tokens(text: str) -> int:
     """Return exact token count for text using tiktoken; fallback ~4 chars/token."""
     if not text:
@@ -42,6 +53,8 @@ def count_tokens(text: str) -> int:
     enc = _get_encoding()
     if enc is False:
         return max(1, len(text) // 4)
+    if len(text) <= _COUNT_CACHE_MAX_CHARS:
+        return _count_exact_cached(text)
     return len(enc.encode(text))
 
 

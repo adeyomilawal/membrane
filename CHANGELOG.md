@@ -9,7 +9,10 @@ Default output changes for end placement (history cut, tail layout), so release 
 - The budget now covers provider message framing: `message_overhead_tokens` (default 3, OpenAI chat framing) per message plus reply priming, so the billed request stays under `max_tokens`. `token_count` stays content-only; `metadata["message_framing_tokens"]` reports the reserve.
 - End placement: the history cut depends only on the budget, the core and framing (`history_share`, default 0.75), on a fixed chunk grid. It no longer shifts with each turn's memories or question, so the cached prefix breaks less often.
 - End placement: the most recently dropped history chunk returns in the tail as low-priority recall (`recall_evicted_history=True`, `metadata["history_messages_recalled"]`). It is trimmed before any memory, skips tool messages, and never enters `ref_map`.
-- New `benchmarks/hard_suite.py`: seven stress scenarios against LangChain `trim_messages`, LlamaIndex `ChatMemoryBuffer` and `Memory`, a Priompt-style cutoff and a naive loop. Results, including the two scenarios Membrane loses, are in the README.
+- End placement: recalled history is now picked by relevance. Dropped messages are split into passages of about 60 words, tool results included, and ranked by the rare words they share with the user message, then by recency. A long paste comes back as its relevant passage instead of not at all.
+- End placement: `rank_fusion=True` chooses which memories survive trimming by reciprocal rank fusion of the order you pass and lexical relevance to the user message. Survivors keep your order; nothing changes when everything fits or when a reranker supplies weights.
+- `count_tokens` caches counts for texts up to 8,000 characters. Compile time on an 80-turn chat dropped from about 40 ms to about 9 ms.
+- New `benchmarks/hard_suite.py`: eight stress scenarios against LangChain `trim_messages`, LlamaIndex `ChatMemoryBuffer` and `Memory`, a Priompt-style cutoff and a naive loop. Results are in the README.
 - New `benchmarks/peer_comparison.py`: naive concatenation, a Priompt-style priority cutoff, and Membrane under a hard budget, with an opt-in `--live` mode against OpenAI.
 
 ## [0.2.1] — 2026-11-10

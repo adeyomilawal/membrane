@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import re
 
 import pytest
 
@@ -49,10 +50,9 @@ def test_evicted_history_is_recalled_in_the_tail_chronologically():
     assert md["history_messages_recalled"] > 0
     tail = r.messages[-1]["content"]
     assert tail.index("--- Earlier conversation ---") < tail.index("--- Memories ---")
-    earlier = [ln for ln in tail.splitlines() if ln.startswith("[Earlier ")]
-    numbers = [int(ln.split()[3]) for ln in earlier]
-    assert numbers == sorted(numbers)
-    # The recalled chunk is the one just before the kept history.
+    numbers = [int(n) for n in re.findall(r"\[Earlier \w+\] (?:question|answer) (\d+)", tail)]
+    assert numbers and numbers == sorted(numbers)
+    # With nothing in the question to match, the most recently dropped turns come back.
     first_kept = int(r.messages[1]["content"].split()[1])
     assert max(numbers) == first_kept - 1
     # Old citations never claim refs in this turn's ref_map.
@@ -69,19 +69,62 @@ def test_recall_yields_to_memories_under_pressure():
     assert len(r.ref_map) > 0
 
 
-def test_tool_messages_are_not_recalled():
+def test_relevant_old_passage_beats_recent_ones():
     history = [
-        {"role": "user", "content": "weather? " + "pad " * 400},
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function"}]},
-        {"role": "tool", "tool_call_id": "c1", "content": "22C " + "pad " * 400},
-        {"role": "assistant", "content": "It is 22C. " + "pad " * 400},
-        *_history(20),
+        {"role": "user", "content": "The warehouse gate code is 7741-Zulu. " + "pad " * 50},
+        {"role": "assistant", "content": "Stored. " + "reply " * 50},
+        *_history(60),
     ]
     cc = ContextCompiler(max_tokens=3000, model_id=MODEL, core_content="Be brief.")
+    r = cc.compile(
+        memories=[], user_message="What is the warehouse gate code?", conversation_messages=history
+    )
+    assert r.metadata["history_messages_dropped"] > 100
+    assert "7741-Zulu" in r.messages[-1]["content"]
+    # Without a matching question the oldest turn does not come back.
     r = cc.compile(memories=[], user_message="now", conversation_messages=history)
+    assert "7741-Zulu" not in r.messages[-1]["content"]
+
+
+def test_long_paste_is_recalled_by_passage():
+    clauses = [f"Clause {i} stays in force." for i in range(400)]
+    clauses.insert(217, "The vault code in this document is V-90210.")
+    history = [
+        {"role": "user", "content": "Here is the contract: " + " ".join(clauses)},
+        {"role": "assistant", "content": "Read it."},
+        *_history(30),
+    ]
+    cc = ContextCompiler(max_tokens=3000, model_id=MODEL, core_content="Be brief.")
+    r = cc.compile(
+        memories=[], user_message="What is the vault code?", conversation_messages=history
+    )
     tail = r.messages[-1]["content"]
-    assert "[Earlier tool]" not in tail
-    assert "22C pad" not in tail
+    assert "V-90210" in tail
+    assert tail.count("Clause") < 200  # passages, not the whole paste
+
+
+def test_tool_results_are_recalled_as_text_and_calls_are_not():
+    history = [
+        {"role": "user", "content": "weather in Lisbon? " + "pad " * 100},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function"}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "Lisbon forecast: 22C, sunny."},
+        {"role": "assistant", "content": "It is warm. " + "pad " * 100},
+        *_history(40),
+    ]
+    cc = ContextCompiler(max_tokens=3000, model_id=MODEL, core_content="Be brief.")
+    r = cc.compile(
+        memories=[], user_message="What was the Lisbon forecast?", conversation_messages=history
+    )
+    tail = r.messages[-1]["content"]
+    assert "[Earlier tool result] Lisbon forecast: 22C, sunny." in tail
+    assert all(m["role"] != "tool" for m in r.messages if "c1" in str(m.get("tool_call_id")))
+    assert "tool_calls" not in tail
+
+
+def test_identifiers_match_whole():
+    from membrane.compiler import _terms
+
+    assert _terms("call_12 and ABC-123, trip 12.") == {"call_12", "and", "abc-123", "trip", "12"}
 
 
 def test_recall_can_be_turned_off():

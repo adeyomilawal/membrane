@@ -10,9 +10,12 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import lru_cache
 from typing import Any
 from collections.abc import Awaitable, Callable, Sequence
 
@@ -463,19 +466,101 @@ def _trim_history_chunked(
     return history[start:], start
 
 
-def _evicted_segment(message: dict[str, Any]) -> str | None:
-    """Plain-text excerpt of an evicted history message for the sacrifice zone.
+# Words and identifiers: "call_12" and "ABC-123" stay whole, so a bare "12" does not match them.
+_TERM = re.compile(r"[A-Za-z0-9]+(?:[-_'][A-Za-z0-9]+)*")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
+_PASSAGE_WORDS = 60
+_RECALL_SCAN = 256  # ranked passages token-counted per compile, at most
+_LEADING_REF = re.compile(r"^\s*\[Mem:\d+[^\]]*\]:?\s*")
+_RECALL_ROLES = {"user": "user", "assistant": "assistant", "tool": "tool result"}
 
-    Tool calls and results are skipped (they make no sense out of order). ``[Mem:`` is
-    neutralized so an old citation never claims a ref in this turn's ``ref_map``.
+
+def _terms(text: str) -> frozenset[str]:
+    return frozenset(t.lower() for t in _TERM.findall(text))
+
+
+@lru_cache(maxsize=8192)
+def _passages(label: str, content: str) -> tuple[tuple[str, frozenset[str]], ...]:
+    """Split a message into passages of about 60 words, each with its term set.
+
+    ``[Mem:`` is neutralized so an old citation never claims a ref in this turn's ``ref_map``.
     """
-    role = message.get("role")
-    content = message.get("content")
-    if role == "tool" or message.get("tool_calls") or not isinstance(content, str):
-        return None
-    if not content.strip():
-        return None
-    return f"[Earlier {role}] " + content.strip().replace("[Mem:", "[mem:")
+    pieces: list[str] = []
+    for sentence in _SENTENCE_END.split(content.strip().replace("[Mem:", "[mem:")):
+        words = sentence.split()
+        # A run-on without punctuation is cut by length, so no passage is too big to recall.
+        pieces += [
+            " ".join(words[i : i + _PASSAGE_WORDS]) for i in range(0, len(words), _PASSAGE_WORDS)
+        ]
+    passages: list[str] = []
+    current: list[str] = []
+    size = 0
+    for piece in pieces:
+        n = len(piece.split())
+        if current and size + n > _PASSAGE_WORDS:
+            passages.append(" ".join(current))
+            current, size = [], 0
+        current.append(piece)
+        size += n
+    if current:
+        passages.append(" ".join(current))
+    return tuple((f"[Earlier {label}] {text}", _terms(text)) for text in passages)
+
+
+def _recall_candidates(evicted: list[dict[str, Any]]) -> list[tuple[str, frozenset[str]]]:
+    """Passages of evicted history, oldest first. Tool results come back as plain text;
+    tool-call stubs and non-text content are skipped."""
+    out: list[tuple[str, frozenset[str]]] = []
+    for message in evicted:
+        label = _RECALL_ROLES.get(str(message.get("role")))
+        content = message.get("content")
+        if label and isinstance(content, str) and content.strip():
+            out.extend(_passages(label, content))
+    return out
+
+
+def _relevance(term_sets: Sequence[frozenset[str]], query: str) -> list[float]:
+    """Lexical relevance of each text to the query: the summed IDF (over these texts) of the
+    query terms it contains, so rare shared words count most."""
+    wanted = _terms(query)
+    df: dict[str, int] = {}
+    for terms in term_sets:
+        for term in terms & wanted:
+            df[term] = df.get(term, 0) + 1
+    n = len(term_sets)
+    idf = {term: math.log(1.0 + n / count) for term, count in df.items()}
+    return [sum(idf[t] for t in terms & wanted) for terms in term_sets]
+
+
+def _rank_recall(candidates: list[tuple[str, frozenset[str]]], query: str) -> list[int]:
+    """Candidate indices, best first: by relevance to the query; ties and non-matches go
+    to the most recently evicted."""
+    scores = _relevance([terms for _, terms in candidates], query)
+    return sorted(range(len(candidates)), key=lambda i: (-scores[i], -i))
+
+
+_RRF_K = 60  # the usual reciprocal-rank-fusion constant
+
+
+def _fused_keep_order(segments: Sequence[tuple[str, int]], query: str) -> list[int]:
+    """Segment indices in the order they should be offered to the firewall.
+
+    Reciprocal rank fusion of the given order (the retriever's rank) and lexical relevance
+    to the query. Texts with equal relevance share the last rank of their group: a tie says
+    nothing, so it earns nothing, and with no lexical signal this is the given order.
+    """
+    scores = _relevance([_terms(_LEADING_REF.sub("", text)) for text, _ in segments], query)
+    by_relevance = sorted(range(len(segments)), key=lambda i: -scores[i])
+    lexical_rank: dict[int, int] = {}
+    for position in range(len(by_relevance) - 1, -1, -1):
+        i = by_relevance[position]
+        below = by_relevance[position + 1] if position + 1 < len(by_relevance) else None
+        tied = below is not None and scores[below] == scores[i]
+        lexical_rank[i] = lexical_rank[below] if tied else position  # type: ignore[index]
+    return sorted(
+        range(len(segments)),
+        key=lambda i: (-(1.0 / (_RRF_K + i) + 1.0 / (_RRF_K + lexical_rank[i])), i),
+    )
 
 
 def _message_text(message: dict[str, Any]) -> str:
@@ -655,11 +740,19 @@ class ContextCompiler:
     many. Turn it off to manage history yourself; an overrun then sets
     ``metadata["budget_exceeded"] = True``.
 
-    With ``recall_evicted_history`` (default) dropped messages are not lost: they join the
-    sacrifice zone as low-priority episodic segments, most recently dropped first, up to one
-    chunk (half the history limit), in whatever room the memories leave. They are trimmed
-    before any memory and never enter ``ref_map``;
+    With ``recall_evicted_history`` (default) dropped messages are not lost. They are split
+    into passages of about 60 words, tool results included, and ranked by the rare words
+    they share with the current user message, then by recency. The best passages, up to one
+    chunk (half the history limit), join the sacrifice zone as low-priority episodic
+    segments in whatever room the memories leave. They are trimmed before any memory and
+    never enter ``ref_map``;
     ``metadata["history_messages_recalled"]`` reports how many survived.
+
+    With ``rank_fusion`` (default, end placement) the memories that survive trimming are
+    chosen by reciprocal rank fusion of the order you passed (your retriever's rank) and
+    lexical relevance to the user message, within each tier. Survivors keep the order you
+    passed, so nothing changes when everything fits. It is skipped when a reranker supplies
+    weights.
 
     ``message_overhead_tokens`` is what the provider bills per chat message on top of its
     content (3 for OpenAI chat models), plus the same again once for reply priming. The
@@ -678,6 +771,7 @@ class ContextCompiler:
     trim_history: bool = True
     history_share: float = DEFAULT_HISTORY_SHARE
     recall_evicted_history: bool = True
+    rank_fusion: bool = True
     message_overhead_tokens: int = DEFAULT_MESSAGE_OVERHEAD_TOKENS
 
     def __post_init__(self) -> None:
@@ -771,15 +865,29 @@ class ContextCompiler:
                 step=max(1, history_limit // 2),
             )
             evicted = full_history[:history_dropped]
+        # Under pressure, which memories survive is decided by the retriever's rank fused
+        # with relevance to this turn; the survivors are still emitted in the given order.
+        given_order: dict[str, int] = {}
+        if self.rank_fusion and segment_weights is None and len(middle_segments) > 1:
+            for i, (text, _) in enumerate(middle_segments):
+                given_order.setdefault(text, i)
+            middle_segments = [
+                middle_segments[i] for i in _fused_keep_order(middle_segments, user_message)
+            ]
         recalled_texts: set[str] = set()
+        recall_order: dict[str, int] = {}
         if self.recall_evicted_history and evicted:
-            # At most one chunk (the most recently dropped one) comes back, so recall does
-            # not inflate every request to the full budget.
+            # Passages of dropped history, picked by relevance to this turn and then recency.
+            # Capped at one chunk so recall does not inflate every request to the full budget.
+            candidates = _recall_candidates(evicted)
             recall_cap, recalled = max(1, history_limit // 2), []
-            for text in filter(None, map(_evicted_segment, reversed(evicted))):
-                recall_cap -= count_fn(text)
-                if recall_cap < 0:
-                    break
+            for i in _rank_recall(candidates, user_message)[:_RECALL_SCAN]:
+                text = candidates[i][0]
+                cost = count_fn(text)
+                if cost > recall_cap or text in recall_order:
+                    continue
+                recall_cap -= cost
+                recall_order[text] = i
                 recalled.append(text)
             recalled_texts = set(recalled)
             middle_segments = [*middle_segments, *((t, TIER_EPISODIC) for t in recalled)]
@@ -810,8 +918,12 @@ class ContextCompiler:
             pinned_tiers=pinned_tiers,
         )
         kept = list(fw_stats.pop("kept_segments", []))
-        earlier = [seg for seg in kept if seg in recalled_texts][::-1]  # chronological
+        earlier = sorted(
+            (seg for seg in kept if seg in recalled_texts), key=recall_order.__getitem__
+        )  # chronological
         kept = [seg for seg in kept if seg not in recalled_texts]
+        if given_order:
+            kept.sort(key=lambda seg: given_order.get(seg, len(given_order)))
         if earlier:
             kept = [_EARLIER_HEADER, *earlier, _MEMORIES_HEADER, *kept]
         tail = ("\n".join(kept) + "\n\n" + end_text) if kept else end_text
