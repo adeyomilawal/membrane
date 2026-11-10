@@ -58,6 +58,30 @@ def count_tokens(text: str) -> int:
     return len(enc.encode(text))
 
 
+def parts_add_up(parts: Sequence[str]) -> bool:
+    """True when the token count of the joined parts is the sum of the parts' counts.
+
+    tiktoken first cuts text into pieces with a regular expression and encodes each piece
+    on its own. No piece runs from a line break into a following non-space character, so a
+    part that ends in a line break, followed by a part that starts with a non-space
+    character, is cut exactly at the join.
+    """
+    return all(p and not p[0].isspace() for p in parts[1:]) and all(
+        p.endswith(("\n", "\r")) for p in parts[:-1]
+    )
+
+
+def count_parts(text: str | Sequence[str], count: Callable[[str], int]) -> tuple[str, int]:
+    """Join ``text`` if it came in parts and count it: part by part when that is exact
+    (:func:`parts_add_up`), so repeated parts hit the count cache, otherwise as a whole."""
+    if isinstance(text, str):
+        return text, count(text)
+    joined = "".join(text)
+    if text and parts_add_up(text):
+        return joined, sum(count(p) for p in text)
+    return joined, count(joined)
+
+
 TIER_PROCEDURAL = 1
 TIER_SEMANTIC = 2
 TIER_EPISODIC = 3
@@ -127,6 +151,9 @@ class PreFlightContextFirewall:
         tier_shares: Mapping[int, float] | None = None,
         pinned_tiers: AbstractSet[int] | None = None,
         thin_segments: Sequence[str | None] | None = None,
+        render: Callable[[list[str], dict[str, str]], str | list[str]] | None = None,
+        reserve_tokens: int = 0,
+        segment_count: Callable[[str], int] | None = None,
     ) -> tuple[str, dict[int, str], int, dict[str, Any]]:
         """
         Build final context string under max_tokens; trim middle by priority.
@@ -150,6 +177,15 @@ class PreFlightContextFirewall:
         its own thin form is placed whole in the first pass; one with ``None`` waits for the
         second. Pinned tiers get
         their full text before any thin form is placed.
+
+        ``render(kept, thinned)`` replaces the default assembly (core, kept middle, end) when
+        the caller lays the text out itself: the returned text is what gets counted against
+        ``max_tokens``, so it is counted once and exactly. It may return the text in parts
+        (see :func:`count_parts`), which are then counted one by one, so parts seen before
+        cost nothing. ``reserve_tokens`` holds room while packing for whatever ``render``
+        adds besides the segments (headers). ``segment_count`` is what one segment costs
+        in the rendered text, when that is not its bare token count (a line with its line
+        break, say).
 
         ``stats`` includes ``segments_offered``, ``segments_kept``, ``tokens_trimmed`` (middle only)
         and ``kept_segments`` (surviving middle texts, in emitted order). With ``thin_segments``
@@ -175,7 +211,8 @@ class PreFlightContextFirewall:
         thin: list[str | None] = [None] * len(segs)
         if thin_segments is not None and len(thin_segments) == len(segs):
             thin = [thin_segments[i] for i in order]
-        offered_tok = sum(count(s[0]) for s in sorted_segments)
+        cost = segment_count or count
+        offered_tok = sum(cost(s[0]) for s in sorted_segments)
 
         core_tok = count(core_text)
         end_tok = count(end_text)
@@ -187,6 +224,8 @@ class PreFlightContextFirewall:
                 self.max_tokens,
             )
             combined = core_text + "\n\n" + end_text
+            if render is not None:
+                combined, reserved = count_parts(render([], {}), count)
             stats: dict[str, Any] = {
                 "segments_offered": len(sorted_segments),
                 "segments_kept": 0,
@@ -195,7 +234,7 @@ class PreFlightContextFirewall:
             }
             return combined, _ref_map_from_text(combined, ref_map), reserved, stats
 
-        budget = self.max_tokens - reserved
+        budget = self.max_tokens - reserved - max(0, reserve_tokens)
         middle_budget = budget
         shares = {
             t: f
@@ -214,7 +253,7 @@ class PreFlightContextFirewall:
             """Place ``text`` for segment ``i``, replacing its thin form if it has one."""
             nonlocal budget, procedural_count
             tier = sorted_segments[i][1]
-            extra = count(text) - spent.get(i, 0)
+            extra = cost(text) - spent.get(i, 0)
             if extra > budget:
                 return False
             if i not in spent:
@@ -245,7 +284,7 @@ class PreFlightContextFirewall:
                 continue
             if (
                 tier in shares
-                and used.get(tier, 0) + count(seg_text) - spent.get(i, 0)
+                and used.get(tier, 0) + cost(seg_text) - spent.get(i, 0)
                 > shares[tier] * middle_budget
             ):
                 deferred.append(i)
@@ -259,32 +298,37 @@ class PreFlightContextFirewall:
         # Separators and token merges at joins are not in the per-segment counts: thin, then
         # drop, the lowest-priority kept segments until the assembled text fits.
         while True:
-            middle_str = "\n".join(kept)
-            final = core_text + "\n\n" + middle_str + "\n\n" + end_text
-            total = count(final)
+            thinned = {
+                str(thin[i]): sorted_segments[i][0]
+                for i in kept_idx
+                if i not in full and thin[i] != sorted_segments[i][0]
+            }
+            if render is not None:
+                final, total = count_parts(render(list(kept), thinned), count)
+            else:
+                final = core_text + "\n\n" + "\n".join(kept) + "\n\n" + end_text
+                total = count(final)
             if total <= self.max_tokens or not kept:
                 break
             for position in range(len(kept_idx) - 1, -1, -1):
                 i = kept_idx[position]
-                if i in full and thin[i] is not None:
+                if i in full and thin[i] is not None and thin[i] != sorted_segments[i][0]:
                     full.discard(i)
                     kept[position] = str(thin[i])
                     break
             else:
                 kept.pop()
                 kept_idx.pop()
-        thinned = {
-            str(thin[i]): sorted_segments[i][0]
-            for i in kept_idx
-            if i not in full and thin[i] != sorted_segments[i][0]
-        }
 
         kept_refs: dict[int, str] = {}
         for seg_text in kept:
             for idx in _segment_refs(seg_text):
                 if idx in ref_map:
                     kept_refs[idx] = ref_map[idx]
-        kept_tok = count(middle_str) if middle_str else 0
+        if render is not None:
+            kept_tok = sum(cost(seg) for seg in kept)  # cached; the text is laid out elsewhere
+        else:
+            kept_tok = count("\n".join(kept)) if kept else 0
         stats = {
             "segments_offered": len(sorted_segments),
             "segments_kept": len(kept),

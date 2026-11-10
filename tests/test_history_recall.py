@@ -166,3 +166,25 @@ def test_a_recalled_passage_that_does_not_fit_is_thinned_to_the_sentence_that_ma
     alone = run(recall_evicted_history=False)
     # Passages only take what the memories leave; the one-line excerpt note is the only cost.
     assert len(r.ref_map) >= len(alone.ref_map) - 1
+
+
+def test_ranking_through_postings_matches_the_plain_ranking():
+    import random
+
+    from membrane.compiler import _rank_postings, _rank_recall, _recall_postings, _relevance
+
+    rng = random.Random(5)
+    words = [f"w{i}" for i in range(60)]
+    for _ in range(50):
+        candidates = [
+            (f"passage {i}", frozenset(rng.sample(words, rng.randint(1, 12))))
+            for i in range(rng.randint(1, 80))
+        ]
+        query = " ".join(rng.sample(words, rng.randint(0, 10)))
+        fast = _rank_postings(_recall_postings(candidates), len(candidates), query, 40)
+        plain = _rank_recall(candidates, query)[:40]
+        scores = _relevance([terms for _, terms in candidates], query)
+        assert len(fast) == len(plain) == min(40, len(candidates))
+        # Same order, up to candidates whose scores differ only by rounding.
+        for a, b in zip(fast, plain, strict=True):
+            assert a == b or abs(scores[a] - scores[b]) < 1e-9

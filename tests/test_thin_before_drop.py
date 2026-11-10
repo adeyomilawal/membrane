@@ -52,7 +52,8 @@ def test_keyframes_alone_are_dropped_from_the_bottom_when_even_they_do_not_fit()
     r = _compile(max_tokens=400)
     kept = sorted(r.ref_map)
     assert 0 < len(kept) < 40
-    assert kept == list(range(1, len(kept) + 1))
+    # Best-ranked first; the last slot may go to a shorter keyframe further down.
+    assert kept[:-1] == list(range(1, len(kept)))
     assert r.metadata["segments_thinned"] == len(kept)
 
 
