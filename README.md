@@ -825,9 +825,36 @@ them next to the question by hand gives the same caching in any of them. Compile
 uv run --extra langchain --extra llamaindex python -m benchmarks.hard_suite
 ```
 
-[`benchmarks/hard_suite_live.py`](benchmarks/hard_suite_live.py) sends the same requests to the
-Claude API and reports real answer accuracy and prompt-cache reads. It needs credentials and
-costs API credits (about 1,300 requests and 7M prompt tokens by default).
+**Live run** ([`benchmarks/hard_suite_live.py`](benchmarks/hard_suite_live.py)): the same eight
+scenarios sent to `claude-opus-5-5` on 2026-11-10, one seed, 1,240 requests. Accuracy means the
+reply contained the fact. "Wrong" counts replies that stated a different code instead of saying
+it was unknown. Cost uses Claude Opus 5.5 prices (cache writes 1.25×, reads 0.05×), relative to
+LangChain = 100. Mean over scenarios:
+
+| | Accuracy | Confident wrong answers | Prompt tokens read from cache | Cost |
+| --- | ---: | ---: | ---: | ---: |
+| LangChain `trim_messages` | 83% | 12 | 40% | 100 |
+| LlamaIndex `Memory` | 77% | 28 | 41% | 90 |
+| **Membrane, defaults** | **92%** | **4** | 63% | 69 |
+| Membrane, `recall_evicted_history=False` | 84% | 24 | 71% | 54 |
+
+Membrane had the best or equal accuracy in every scenario. It cost less in six, about the same
+with long pastes (102), and more under a 3,000-token budget (120), where the system prompt is
+half the request and every strategy caches it. With a 24,000-token budget it cost 23.
+
+Three things to know when reading this. It is one seed on one model. The peers' cost is
+recomputed from the recorded token counts: the run gave them a cache breakpoint after history
+that their layout can never read, so those writes are priced here as plain input (the script
+no longer places that breakpoint). And the paraphrase scenario's memory questions are left out
+of accuracy, because they name projects by an alias no model can resolve. Raw results are in
+[`benchmarks/results/`](benchmarks/results/).
+
+```bash
+uv run --extra langchain --extra llamaindex --extra llm-anthropic python -m benchmarks.hard_suite_live
+```
+
+The run needs Claude API credentials and costs API credits (about $22 at list prices for the
+default four strategies on Claude Opus 5.5).
 
 Also in `benchmarks/`: `token_savings_bench.py` (savings from compression and trimming) and
 `trimming_bench.py` (trimming keeps high-priority content and the U-shaped layout).

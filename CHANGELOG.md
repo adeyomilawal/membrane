@@ -12,7 +12,7 @@ Default output changes for end placement (history cut, tail layout), so release 
 - End placement: recalled history is now picked by relevance. Dropped messages are split into passages of about 60 words, tool results included, and ranked by the rare words they share with the user message, then by recency. A long paste comes back as its relevant passage instead of not at all.
 - End placement: `rank_fusion=True` chooses which memories survive trimming by reciprocal rank fusion of the order you pass and lexical relevance to the user message. Survivors keep your order; nothing changes when everything fits or when a reranker supplies weights.
 - `count_tokens` caches counts for texts up to 8,000 characters. Compile time on an 80-turn chat dropped from about 40 ms to about 9 ms.
-- New `benchmarks/hard_suite_live.py`: runs the hard suite against the Claude API for real answer accuracy and prompt-cache usage. Not run yet.
+- New `benchmarks/hard_suite_live.py`: runs the hard suite against the Claude API for real answer accuracy and prompt-cache usage. First run (`claude-opus-5-5`, one seed) is in the README and `benchmarks/results/`.
 - New `benchmarks/hard_suite.py`: eight stress scenarios against LangChain `trim_messages`, LlamaIndex `ChatMemoryBuffer` and `Memory`, a Priompt-style cutoff and a naive loop. Results are in the README.
 - New `benchmarks/peer_comparison.py`: naive concatenation, a Priompt-style priority cutoff, and Membrane under a hard budget, with an opt-in `--live` mode against OpenAI.
 

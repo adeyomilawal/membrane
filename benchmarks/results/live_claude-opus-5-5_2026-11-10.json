@@ -1,0 +1,509 @@
+{
+  "model": "claude-opus-5-5",
+  "results": {
+    "marathon": {
+      "langchain": {
+        "prompt": 799071,
+        "read": 0.28568299938303354,
+        "write": 0.6944138881275882,
+        "cost": 100.0,
+        "accuracy": {
+          "history": 0.7647058823529411,
+          "memory": 1.0
+        },
+        "accuracy_all": 0.95,
+        "wrong": 3,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 80
+      },
+      "llamaindex-memory": {
+        "prompt": 588750,
+        "read": 0.33684925690021233,
+        "write": 0.6361375796178343,
+        "cost": 68.8059883693303,
+        "accuracy": {
+          "history": 0.6470588235294118,
+          "memory": 0.9841269841269841
+        },
+        "accuracy_all": 0.9125,
+        "wrong": 5,
+        "errors": 0,
+        "refusals": 1,
+        "requests": 80
+      },
+      "membrane": {
+        "prompt": 780676,
+        "read": 0.6837676577735193,
+        "write": 0.010802176575173312,
+        "cost": 41.28731397291639,
+        "accuracy": {
+          "history": 1.0,
+          "memory": 1.0
+        },
+        "accuracy_all": 1.0,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 80
+      },
+      "membrane-lean": {
+        "prompt": 616887,
+        "read": 0.8002632572902331,
+        "write": 0.07872106236636532,
+        "cost": 25.223639415375054,
+        "accuracy": {
+          "history": 0.6470588235294118,
+          "memory": 1.0
+        },
+        "accuracy_all": 0.925,
+        "wrong": 5,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 80
+      }
+    },
+    "tools": {
+      "langchain": {
+        "prompt": 326767,
+        "read": 0.367601379576273,
+        "write": 0.6044306799646231,
+        "cost": 100.0,
+        "accuracy": {
+          "history": 1.0,
+          "memory": 0.9545454545454546,
+          "tool": 0.5833333333333334
+        },
+        "accuracy_all": 0.85,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 1,
+        "requests": 40
+      },
+      "llamaindex-memory": {
+        "prompt": 252385,
+        "read": 0.42880916060780155,
+        "write": 0.534980288051984,
+        "cost": 70.41507484069304,
+        "accuracy": {
+          "history": 0.3333333333333333,
+          "memory": 1.0,
+          "tool": 0.5833333333333334
+        },
+        "accuracy_all": 0.775,
+        "wrong": 5,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 40
+      },
+      "membrane": {
+        "prompt": 323109,
+        "read": 0.6469860016279336,
+        "write": 0.05427270673364097,
+        "cost": 51.98954618036384,
+        "accuracy": {
+          "history": 1.0,
+          "memory": 1.0,
+          "tool": 0.75
+        },
+        "accuracy_all": 0.925,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 40
+      },
+      "membrane-lean": {
+        "prompt": 263291,
+        "read": 0.735729667933959,
+        "write": 0.12485045064206525,
+        "cost": 36.25225715948604,
+        "accuracy": {
+          "history": 0.5,
+          "memory": 1.0,
+          "tool": 0.5833333333333334
+        },
+        "accuracy_all": 0.8,
+        "wrong": 2,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 40
+      }
+    },
+    "flood": {
+      "langchain": {
+        "prompt": 236958,
+        "read": 0.31385308788899297,
+        "write": 0.6365474050253631,
+        "cost": 100.0,
+        "accuracy": {
+          "history": 0.5,
+          "memory": 1.0
+        },
+        "accuracy_all": 0.9,
+        "wrong": 3,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "llamaindex-memory": {
+        "prompt": 235252,
+        "read": 0.4479154268614082,
+        "write": 0.5021253804430993,
+        "cost": 81.8103943148381,
+        "accuracy": {
+          "history": 0.5,
+          "memory": 1.0
+        },
+        "accuracy_all": 0.9,
+        "wrong": 3,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "membrane": {
+        "prompt": 226817,
+        "read": 0.5478337161676594,
+        "write": 0.055388264548071796,
+        "cost": 56.86391835703154,
+        "accuracy": {
+          "history": 1.0,
+          "memory": 1.0
+        },
+        "accuracy_all": 1.0,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "membrane-lean": {
+        "prompt": 226030,
+        "read": 0.5256558863867629,
+        "write": 0.07966641596248286,
+        "cost": 59.498829631679975,
+        "accuracy": {
+          "history": 1.0,
+          "memory": 1.0
+        },
+        "accuracy_all": 1.0,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      }
+    },
+    "multi-fact": {
+      "langchain": {
+        "prompt": 229649,
+        "read": 0.34909361678039097,
+        "write": 0.6198241664453144,
+        "cost": 100.0,
+        "accuracy": {
+          "memory": 1.0,
+          "multi": 1.0
+        },
+        "accuracy_all": 1.0,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "llamaindex-memory": {
+        "prompt": 192557,
+        "read": 0.38622330011373257,
+        "write": 0.5767071568418702,
+        "cost": 79.44082422841232,
+        "accuracy": {
+          "memory": 1.0,
+          "multi": 0.6956521739130435
+        },
+        "accuracy_all": 0.7666666666666667,
+        "wrong": 7,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "membrane": {
+        "prompt": 227382,
+        "read": 0.6031084254690345,
+        "write": 0.08302328240581928,
+        "cost": 56.286383430079596,
+        "accuracy": {
+          "memory": 1.0,
+          "multi": 1.0
+        },
+        "accuracy_all": 1.0,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "membrane-lean": {
+        "prompt": 196188,
+        "read": 0.6990029971252064,
+        "write": 0.09622403001202928,
+        "cost": 40.130586733954004,
+        "accuracy": {
+          "memory": 1.0,
+          "multi": 0.7391304347826086
+        },
+        "accuracy_all": 0.8,
+        "wrong": 6,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      }
+    },
+    "paste": {
+      "langchain": {
+        "prompt": 212507,
+        "read": 0.5082797272560433,
+        "write": 0.40103149543309163,
+        "cost": 100.0,
+        "accuracy": {
+          "history": 0.4,
+          "memory": 1.0,
+          "paste": 0.6
+        },
+        "accuracy_all": 0.8333333333333334,
+        "wrong": 3,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "llamaindex-memory": {
+        "prompt": 174479,
+        "read": 0.47008522515603596,
+        "write": 0.41946022157394297,
+        "cost": 87.08422644669724,
+        "accuracy": {
+          "history": 0.2,
+          "memory": 1.0,
+          "paste": 0.4
+        },
+        "accuracy_all": 0.7666666666666667,
+        "wrong": 4,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "membrane": {
+        "prompt": 201757,
+        "read": 0.4844590274439053,
+        "write": 0.06202510941379977,
+        "cost": 85.59012831550035,
+        "accuracy": {
+          "history": 0.6,
+          "memory": 1.0,
+          "paste": 0.8
+        },
+        "accuracy_all": 0.9,
+        "wrong": 2,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "membrane-lean": {
+        "prompt": 151925,
+        "read": 0.7142076682573638,
+        "write": 0.01152542372881356,
+        "cost": 40.04906999080533,
+        "accuracy": {
+          "history": 0.2,
+          "memory": 1.0,
+          "paste": 0.0
+        },
+        "accuracy_all": 0.7,
+        "wrong": 8,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      }
+    },
+    "tiny": {
+      "langchain": {
+        "prompt": 132802,
+        "read": 0.7298911160976491,
+        "write": 0.2210132377524435,
+        "cost": 100.0,
+        "accuracy": {
+          "history": 0.5714285714285714,
+          "memory": 1.0
+        },
+        "accuracy_all": 0.9,
+        "wrong": 3,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "llamaindex-memory": {
+        "prompt": 126547,
+        "read": 0.6317020553628296,
+        "write": 0.3167755853556386,
+        "cost": 122.15593594552932,
+        "accuracy": {
+          "history": 0.42857142857142855,
+          "memory": 1.0
+        },
+        "accuracy_all": 0.8666666666666667,
+        "wrong": 4,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "membrane": {
+        "prompt": 134969,
+        "read": 0.6868095636775853,
+        "write": 0.06358497136379465,
+        "cost": 101.4828403921602,
+        "accuracy": {
+          "history": 0.5714285714285714,
+          "memory": 1.0
+        },
+        "accuracy_all": 0.9,
+        "wrong": 2,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      },
+      "membrane-lean": {
+        "prompt": 127344,
+        "read": 0.6739461615780877,
+        "write": 0.12137988440758889,
+        "cost": 102.01448531573092,
+        "accuracy": {
+          "history": 0.5714285714285714,
+          "memory": 1.0
+        },
+        "accuracy_all": 0.9,
+        "wrong": 3,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 30
+      }
+    },
+    "paraphrase": {
+      "langchain": {
+        "prompt": 239921,
+        "read": 0.30997703410706023,
+        "write": 0.6493887571325562,
+        "cost": 100.0,
+        "accuracy": {
+          "history": 0.2,
+          "memory": 0.08
+        },
+        "accuracy_all": 0.1,
+        "wrong": 26,
+        "errors": 0,
+        "refusals": 1,
+        "requests": 30
+      },
+      "llamaindex-memory": {
+        "prompt": 239226,
+        "read": 0.3562572630065294,
+        "write": 0.6029904776236696,
+        "cost": 93.69951660505288,
+        "accuracy": {
+          "history": 0.2,
+          "memory": 0.08
+        },
+        "accuracy_all": 0.1,
+        "wrong": 26,
+        "errors": 0,
+        "refusals": 1,
+        "requests": 30
+      },
+      "membrane": {
+        "prompt": 226564,
+        "read": 0.5345244610794301,
+        "write": 0.0854813650888932,
+        "cost": 57.75833555488975,
+        "accuracy": {
+          "history": 0.6,
+          "memory": 0.04
+        },
+        "accuracy_all": 0.13333333333333333,
+        "wrong": 21,
+        "errors": 0,
+        "refusals": 3,
+        "requests": 30
+      },
+      "membrane-lean": {
+        "prompt": 224976,
+        "read": 0.6100072896664533,
+        "write": 0.014374866652442928,
+        "cost": 48.25513061572107,
+        "accuracy": {
+          "history": 0.6,
+          "memory": 0.08
+        },
+        "accuracy_all": 0.16666666666666666,
+        "wrong": 23,
+        "errors": 0,
+        "refusals": 1,
+        "requests": 30
+      }
+    },
+    "roomy": {
+      "langchain": {
+        "prompt": 416413,
+        "read": 0.3332845036057952,
+        "write": 0.6468241865647807,
+        "cost": 100.0,
+        "accuracy": {
+          "history": 1.0,
+          "memory": 1.0
+        },
+        "accuracy_all": 1.0,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 40
+      },
+      "llamaindex-memory": {
+        "prompt": 416413,
+        "read": 0.2381289729187129,
+        "write": 0.741979717251863,
+        "cost": 112.69844631607225,
+        "accuracy": {
+          "history": 1.0,
+          "memory": 1.0
+        },
+        "accuracy_all": 1.0,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 40
+      },
+      "membrane": {
+        "prompt": 415581,
+        "read": 0.8924734287659927,
+        "write": 0.023665663252169854,
+        "cost": 23.473786234070023,
+        "accuracy": {
+          "history": 1.0,
+          "memory": 1.0
+        },
+        "accuracy_all": 1.0,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 40
+      },
+      "membrane-lean": {
+        "prompt": 415581,
+        "read": 0.8954379531306773,
+        "write": 0.020701138887485232,
+        "cost": 23.07896274675423,
+        "accuracy": {
+          "history": 1.0,
+          "memory": 1.0
+        },
+        "accuracy_all": 1.0,
+        "wrong": 0,
+        "errors": 0,
+        "refusals": 0,
+        "requests": 40
+      }
+    }
+  }
+}

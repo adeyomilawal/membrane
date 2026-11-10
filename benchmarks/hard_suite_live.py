@@ -11,8 +11,13 @@ API and reports, per scenario and strategy:
   Cache reads are cheaper than 0.1x on some models, which widens the gaps.
 - ``errors``: requests the API rejected (for example a tool result split from its call).
 
-Every strategy gets the same two cache breakpoints: after the core system prompt and after
-the last history message. Assistant turns stay scripted so all strategies see the same
+Every strategy gets a cache breakpoint after the core system prompt. Strategies whose
+system message is the core alone also get one after the last history message; where
+memories sit in the system message that breakpoint would be written every turn and never
+read, so it is left out. The ``paraphrase`` scenario's memory questions name projects by an
+alias no model can resolve, so they are sent (to keep the conversation intact) but not graded.
+
+Assistant turns stay scripted so all strategies see the same
 history. Budgets are enforced in tiktoken tokens for every strategy; Claude's own counts are
 higher, by the same factor for everyone. Refusal fallbacks are left off on purpose: a
 refusal counts as a wrong answer instead of being rerouted to another model.
@@ -91,8 +96,10 @@ def to_claude(messages: list[hs.Message], with_tools: bool) -> dict[str, Any]:
         else:
             text_block = {"type": "text", "text": str(m.get("content") or "")}
             out.append({"role": m["role"], "content": [text_block]})
-    if len(out) >= 2:
-        out[-2]["content"][-1]["cache_control"] = CACHE  # end of history
+    # A breakpoint after history only pays when everything before it is stable. With
+    # memories in the system message it would be written every turn and never read.
+    if len(out) >= 2 and len(params.get("system", [])) <= 1:
+        out[-2]["content"][-1]["cache_control"] = CACHE
     params["messages"] = out
     if with_tools:
         params["tools"] = TOOLS
@@ -147,9 +154,10 @@ def run_live(
             score.read += usage.cache_read_input_tokens or 0
             score.refusals += response.stop_reason == "refusal"
             reply = " ".join(b.text for b in response.content if b.type == "text")
-        right = all(n in reply for n in turn.needles)
-        score.correct.setdefault(turn.kind, []).append(right)
-        score.wrong += (not right) and bool(_CODE.search(reply))
+        if not (sc.paraphrase and turn.kind == "memory"):
+            right = all(n in reply for n in turn.needles)
+            score.correct.setdefault(turn.kind, []).append(right)
+            score.wrong += (not right) and bool(_CODE.search(reply))
         history = [*history, {"role": "user", "content": turn.user}, *turn.follow]
     return score
 

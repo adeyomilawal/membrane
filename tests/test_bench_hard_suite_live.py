@@ -69,16 +69,24 @@ def test_to_claude_converts_tools_and_places_breakpoints():
         "input": {"trip": 3},
     }
     assert params["messages"][2]["content"][0]["tool_use_id"] == "c1"
-    assert params["messages"][-2]["content"][-1]["cache_control"] == live.CACHE
-    assert "cache_control" not in params["messages"][-1]["content"][-1]
+    # Memories in the system message: a history breakpoint would never be read.
+    assert all("cache_control" not in b for m in params["messages"] for b in m["content"])
     assert params["tools"] == live.TOOLS
 
 
-def test_core_only_system_is_one_cached_block():
+def test_core_only_system_gets_a_history_breakpoint():
     params = live.to_claude(
-        [{"role": "system", "content": CORE}, {"role": "user", "content": "hi"}], with_tools=False
+        [
+            {"role": "system", "content": CORE},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "again"},
+        ],
+        with_tools=False,
     )
     assert params["system"] == [{"type": "text", "text": CORE, "cache_control": live.CACHE}]
+    assert params["messages"][-2]["content"][-1]["cache_control"] == live.CACHE
+    assert "cache_control" not in params["messages"][-1]["content"][-1]
     assert "tools" not in params
 
 
@@ -99,9 +107,13 @@ def test_live_run_scores_and_sums_usage_across_threads():
     assert all(r["tools"] == live.TOOLS for r in client.requests)
 
 
-def test_confident_wrong_answers_are_counted():
+def test_paraphrase_memory_questions_are_sent_but_not_graded():
     sc = BY_NAME["paraphrase"]
-    scores = live.run_scenario(sc, 1, {"membrane": hs.Membrane}, FakeClient(), "m", workers=1)
+    client = FakeClient()
+    scores = live.run_scenario(sc, 1, {"membrane": hs.Membrane}, client, "m", workers=1)
+    assert len(client.requests) == sc.turns
     row = live.summarize(scores["membrane"], scores["membrane"])
-    assert row["accuracy"]["memory"] == 0.0
-    assert row["wrong"] >= sum(len(s.correct["memory"]) for s in scores["membrane"])
+    assert set(row["accuracy"]) == {"history"}
+    graded = sum(len(v) for s in scores["membrane"] for v in s.correct.values())
+    assert graded < sc.turns
+    assert row["wrong"] <= graded
