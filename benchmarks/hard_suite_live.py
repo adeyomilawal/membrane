@@ -26,7 +26,7 @@ higher, by the same factor for everyone. Refusal fallbacks are left off on purpo
 refusal counts as a wrong answer instead of being rerouted to another model.
 
 Needs credentials the Anthropic SDK can find (``ANTHROPIC_API_KEY`` or ``ant auth login``).
-Default: 4 strategies, 1 seed, about 1,300 requests and 7M prompt tokens.
+Default: 4 strategies, 1 seed, about 1,400 requests and 7.5M prompt tokens.
 
 Run: ``uv run --extra langchain --extra llamaindex --extra llm-anthropic \\
       python -m benchmarks.hard_suite_live [--model ID] [--seeds N] [--scenario NAME]

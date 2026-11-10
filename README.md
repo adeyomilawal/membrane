@@ -197,6 +197,16 @@ budget.
 Every memory carries a priority tier. When the prompt is over budget, the firewall drops
 memories from the lowest-priority tier first. The start and end regions are always kept.
 
+With end placement, nothing is dropped while something else still has its full text
+(`thin_before_drop`). Every memory has a keyframe: its densest sentence under
+`keyframe_tokens` (40), where dense means its words are rare across the sentences of the
+memories on offer and of the conversation. Under pressure the keyframes of all memories are
+placed first, then memories get their full text back in priority order while room lasts. A
+thinned memory keeps its `[Mem:N]` ref and ends in `…`, so the model can still cite it or ask
+for the full text. `metadata["segments_thinned"]` counts them. A memory with no sentence under
+the cap is kept whole or dropped, as before. A keyframe is one sentence: a fact spread over two
+sentences of a memory is only half there once that memory is thinned.
+
 | Tier | Constant | `MemoryItem.priority` | Typical content | Trimmed |
 | --- | --- | --- | --- | --- |
 | 1 | `TIER_PROCEDURAL` | `1` | Procedures, instructions | Last (at most 3 are kept) |
@@ -233,7 +243,31 @@ assert "fact" in result.ref_map.values()                       # semantic kept
 ```
 
 Token counts use tiktoken's `cl100k_base` encoding by default, for every model. That is exact for
-GPT-4 and GPT-3.5 but only approximate for other tokenizers. To count with a model's own tokenizer,
+GPT-4 and GPT-3.5 but other tokenizers count the same text differently (Claude counts more). So
+the budget is divided by a per-model `token_scale`. It starts from a seed in the capability map
+(1.0 for OpenAI, 1.2 for older Claude models, 1.5 for Claude Opus 4.7 and later) and you correct
+it with what the provider actually billed:
+
+```python
+from membrane import ContextCompiler, MemoryItem
+
+compiler = ContextCompiler(max_tokens=8000, model_id="anthropic/claude-opus-5-5")
+result = compiler.compile(memories=[MemoryItem(id="1", content="User is in Lagos.")],
+                          user_message="What time zone am I in?")
+# ... send the request, then report the prompt tokens the provider counted:
+# usage = response.usage
+# compiler.observe(result, usage.input_tokens + usage.cache_read_input_tokens
+#                          + usage.cache_creation_input_tokens)
+print(result.metadata["token_scale"], result.metadata["tokens_budget_counted"])  # 1.5 5333
+```
+
+`observe` smooths the ratio per model, adds a margin from its spread, and later compiles use the
+result. The scale in use moves in steps of 0.05, rises at once and falls only when it is 0.1 too
+high, because every change moves the history cut and breaks the cache once. It lives on the
+compiler object: nothing is downloaded, stored or sent. Pass `token_scale=1.0` to turn it off.
+The seeds are starting points measured on little data; `observe` is what makes the budget right.
+
+To count with a model's own tokenizer instead,
 pass a `TokenizerRegistry` with patterns for your model ids. `TokenizerRegistry.get()` returns a
 shared registry preloaded with patterns for bare ids (`gpt-4o*` → `o200k_base`, `claude*` →
 `cl100k_base`). `TokenizerRegistry()` starts empty:
@@ -309,10 +343,22 @@ from cache. History may hold `history_share` (default 0.75) of the budget left a
 Past that, the oldest turns are dropped in chunks of half that share
 (`metadata["history_messages_dropped"]`). The cut depends only on the budget and the core, never
 on this turn's memories or question, so it stays put as the chat grows and the cache breaks only
-when another chunk goes. Dropped turns are not lost (`recall_evicted_history`): they are split
-into passages of about 60 words, tool results included, and ranked by the rare words they share
-with the current user message, then by recency. The best passages, up to one chunk, return in the
-dynamic tail as low-priority recall, trimmed before any memory and kept out of `ref_map`.
+when another chunk goes.
+
+Dropped turns are not lost. Each dropped message leaves one line in an index placed in the
+system message right after the core (`eviction_index`): its role and its keyframe (see
+[Token budgets](#token-budgets-and-priority-tiers)), scored over the conversation up to the cut
+that dropped it. A line never changes after it is written, so the index only changes when the
+cut moves, and at that moment the cache after the core is rewritten anyway: the index adds no
+cache breaks. It has `index_share` (one eighth) of the budget the core leaves, taken out of the
+history share; over that, its oldest lines go, again only at a cut. Tool results get a line,
+tool-call stubs do not, and a long message keeps one keyframe per 400 tokens of its length.
+
+Passages come back in full where they match (`recall_evicted_history`): dropped messages are
+split into passages of about 60 words, tool results included, and ranked by the rare words they
+share with the current user message, then by recency. The best passages, up to one chunk, return
+in the dynamic tail and stay out of `ref_map`. No memory is dropped to make room for one; a
+passage that does not fit whole is cut to the sentence that matches the question.
 
 When memories do not all fit, the ones that survive are chosen by reciprocal rank fusion of the
 order you passed (your retriever's rank) and the same lexical relevance (`rank_fusion`). The
@@ -330,9 +376,17 @@ calls.
 | `memory_placement` | `"end"` (end placement only) |
 | `stable_prefix_messages` | Number of leading messages that form the stable prefix |
 | `history_messages_dropped` | Oldest history messages dropped to fit the budget |
-| `history_messages_recalled` | Dropped messages that came back in the tail as recall |
+| `history_messages_recalled` | Dropped passages that came back in the tail as recall |
+| `history_index_lines` / `history_index_tokens` | Size of the eviction index in the system message |
+| `core_chars` | Where the core ends inside the system message (set when there is an index) |
+| `segments_thinned` | Memories and passages cut to their keyframe |
+| `cache_breakpoints` | Where a cached prefix ends: `{"message_index", "tokens", "reason"}`, plus `"chars"` inside a message |
+| `cache_mode` | `"automatic"` (the provider caches by itself) or `"marked"` (the request must mark the prefix) |
+| `history_cache_expected_reads` | Turns the history is expected to last before the next cut |
+| `token_scale` / `token_scale_samples` | Provider tokens per counted token, and how many `observe` calls shaped it |
+| `tokens_budget_counted` | The budget in counted tokens (`tokens_budget / token_scale`), when the scale is not 1 |
 | `message_framing_tokens` | Per-message framing reserved in the budget (`token_count` is content only) |
-| `prompt_cache_used` | `True` when the model supports caching and the prefix is at least 1,024 tokens |
+| `prompt_cache_used` | `True` when the model supports caching and the prefix reaches the model's minimum cacheable size |
 | `cacheable_prefix_tokens` / `dynamic_tail_tokens` | Sizes of the two parts (set with `prompt_cache_used`) |
 | `budget_exceeded` | Reserved content (rules, history, current turn) alone exceeded `max_tokens` |
 
@@ -378,12 +432,13 @@ pass `persist_ref_map_to_redis=True` to `compile_prompt_async`.
 ### Capability map
 
 Membrane ships a capability map ([`llm_capabilities.json`](src/membrane/llm_capabilities.json))
-that sets the context cap and prompt-caching support for each model:
+that sets the context cap, prompt-caching support, cache prices and token scale for each model:
 
 | Model IDs | Context cap | Prompt caching |
 | --- | --- | --- |
 | `openai/gpt-4o`, `openai/gpt-4o-mini`, `openai/gpt-4-turbo`, `openai/gpt-5.1` | 128,000 | Yes |
 | `anthropic/claude-3-5-sonnet`, `anthropic/claude-3-7-sonnet`, `anthropic/claude-sonnet-4.5`, `anthropic/claude-3-opus` | 200,000 | Yes |
+| `anthropic/claude-opus-*`, `claude-sonnet-*`, `claude-haiku-*`, `claude-fable-*` (matched by family, so `claude-opus-5-5` resolves) | 200,000, or 1,000,000 for Opus 4.6+, Sonnet 4.6+, Haiku 5+ and Fable | Yes |
 | `google/gemini-3-pro-preview`, `google/gemini-pro-1.5` | 1,000,000 | Yes |
 | `x-ai/grok-4` | 131,072 | Yes |
 | `qwen2.5:7b`, `llama3.2`, `llama3.1:8b`, `llama-3` (local) | 4,096–32,768 | No |
@@ -392,6 +447,20 @@ Lookups ignore case, a missing provider prefix and date suffixes, so `gpt-4o` an
 `openai/gpt-4o-2024-08-06` both resolve to `openai/gpt-4o`. Unknown models get no caching and no
 context cap, and log a warning once. To use your own map, point `LLM_CAPABILITY_MAP_PATH` at a
 JSON file with the same `capabilities` and `context_caps` keys; it replaces the bundled map.
+
+Two more sections of the map drive the layout. `cache_pricing` gives, per model, the cache write
+and read prices relative to plain input, the shortest prefix the provider caches, and whether
+caching is `automatic` (OpenAI) or `marked` (Anthropic). `token_scale` is the seed for
+[calibrated budgets](#token-budgets-and-priority-tiers). Both are optional in your own map and
+both are lists of prices and ratios that providers change, so check them against your provider's
+current pricing page.
+
+```python
+from membrane import get_cache_pricing, get_token_scale
+
+print(get_cache_pricing("claude-opus-5-5"))  # mode='marked', write=1.25, read=0.05, min_tokens=512
+print(get_token_scale("gpt-4o"))             # 1.0
+```
 
 ```python
 from membrane import get_context_cap_for_model, has_prompt_caching
@@ -421,32 +490,43 @@ OpenAI caches long shared prefixes automatically, so end placement is all you ne
 
 ### Anthropic
 
-The Anthropic Messages API takes the system prompt as a separate `system` parameter. Split it
-off and mark it cacheable with `anthropic_system_blocks`:
+The Anthropic Messages API takes the system prompt as a separate `system` parameter and only
+caches what the request marks with `cache_control`. `anthropic_request` builds both from a
+compile result:
 
 ```python
-from membrane import ContextCompiler, MemoryItem, anthropic_system_blocks
+from membrane import ContextCompiler, MemoryItem, anthropic_request
 
-compiler = ContextCompiler(max_tokens=8192, model_id="anthropic/claude-sonnet-4.5",
+compiler = ContextCompiler(max_tokens=8192, model_id="anthropic/claude-opus-5-5",
                            core_content="You are a helpful assistant.")
 result = compiler.compile(memories=[MemoryItem(id="1", content="User is in Lagos.")],
                           user_message="What time zone am I in?")
 
-system, *messages = result.messages
-assert system["role"] == "system"
 request = {
-    "model": "claude-sonnet-4-5",  # the API's model name, not Membrane's model_id
+    "model": "claude-opus-5-5",  # the API's model name, not Membrane's model_id
     "max_tokens": 1024,
-    "system": anthropic_system_blocks(system["content"], ""),  # adds cache_control
-    "messages": messages,
+    **anthropic_request(result),  # "system" blocks and "messages", cache_control placed
 }
 # import anthropic
-# anthropic.Anthropic().messages.create(**request)
+# response = anthropic.Anthropic().messages.create(**request)
+# usage = response.usage
+# compiler.observe(result, usage.input_tokens + usage.cache_read_input_tokens
+#                          + usage.cache_creation_input_tokens)
 ```
 
-This caches the system prompt. To cache the conversation history as well, add a `cache_control`
-breakpoint to the last history message yourself. Membrane does not add one. Anthropic only
-caches prefixes above a model-specific minimum length.
+The markers go where `metadata["cache_breakpoints"]` says a cached prefix ends: after the core
+system prompt, and after the conversation history. Tool calls and tool results in the history are
+converted to `tool_use` and `tool_result` blocks. Nothing is marked below the model's minimum
+cacheable size (512 to 4,096 tokens depending on the model).
+
+The history marker follows the cache prices. A cut rewrites the history, and writing to the cache
+costs more than plain input (1.25x on Anthropic), so the history is marked only when it is
+expected to be read back before the next cut: the room left before the cut over the mean size of
+a turn. Once a request since the cut has marked it, later ones keep the marker. In practice this
+only holds the marker back when the budget is so small that a cut comes every turn or two; in a
+simulation of the 3,000-token scenario it saved about 0.1% of input cost, so do not expect much
+from it. Pass `ttl="1h"` for the one-hour cache. `anthropic_request` needs end placement (the
+default); `anthropic_system_blocks(prefix, tail)` is still there for text you split yourself.
 
 ### Local models
 
@@ -615,8 +695,17 @@ To write the compressor against a class instead of a bare function, implement th
 | `recall_evicted_history` | `True` | Bring passages of dropped history back as low-priority recall, picked by relevance to the question, then recency |
 | `rank_fusion` | `True` | When memories must be trimmed, choose survivors by your order fused with lexical relevance to the question |
 | `message_overhead_tokens` | `3` | Tokens billed per message on top of content (OpenAI chat framing), reserved in the budget |
+| `thin_before_drop` | `True` | With end placement, place every memory's keyframe before dropping any, then restore full text by priority |
+| `keyframe_tokens` | `40` | Longest sentence that can be a keyframe |
+| `eviction_index` | `True` | Keep one keyframe line per dropped history message in the system message, changed only when the cut moves |
+| `index_share` | `0.125` | Share of the budget after the core that the eviction index may hold (taken out of `history_share`) |
+| `token_scale` | `None` | Provider tokens per counted token. `None`: seed from the capability map, corrected by `observe()`; a number fixes it |
 | `metrics_callback` | `None` | Receives a `CompileMetrics` after each compile (token counts, never prompt text) |
 | `preflight_analyst_model` | `None` | Model hint for your pre-flight compressor |
+
+`compiler.observe(result, actual_prompt_tokens)` reports what the provider billed for a compiled
+prompt and returns the scale now in use. `compile_anonymous(...)` takes the same history options
+when called with `memory_placement="end"`.
 
 ### `compile()` / `compile_async()` arguments
 
@@ -784,7 +873,7 @@ needed memory every time, against 95% for naive.
 python -m benchmarks.peer_comparison [--budget N] [--memories N] [--live]
 ```
 
-**Hard suite** ([`benchmarks/hard_suite.py`](benchmarks/hard_suite.py)): eight stress scenarios,
+**Hard suite** ([`benchmarks/hard_suite.py`](benchmarks/hard_suite.py)): nine stress scenarios,
 5 seeds each, against LangChain `trim_messages`, LlamaIndex `ChatMemoryBuffer` and `Memory`, a
 Priompt-style cutoff and a naive loop. Offline; recall means the answer was in the prompt, an
 upper bound on accuracy. Mean over all scenarios (cost relative to naive = 100):
@@ -792,42 +881,67 @@ upper bound on accuracy. Mean over all scenarios (cost relative to naive = 100):
 | | Cost at 0.5× / 0.1× cache reads | Recall | Turns over budget | Invalid tool requests |
 | --- | ---: | ---: | ---: | ---: |
 | Naive loop | 100 / 100 | 92% | 0 | 10 |
-| LangChain `trim_messages` | 98 / 98 | 92% | 0 | 0 |
-| LlamaIndex `ChatMemoryBuffer` | 99 / 98 | 92% | 289 | 0 |
-| LlamaIndex `Memory` | 85 / 83 | 87% | 239 | 0 |
+| LangChain `trim_messages` | 99 / 98 | 92% | 0 | 0 |
+| LlamaIndex `ChatMemoryBuffer` | 99 / 98 | 92% | 325 | 0 |
+| LlamaIndex `Memory` | 84 / 82 | 87% | 239 | 0 |
 | Priompt-style cutoff | 99 / 98 | 92% | 0 | 0 |
-| **Membrane, defaults** | **82 / 65** | **95%** | 0 | 0 |
-| Membrane, `recall_evicted_history=False` | 69 / 50 | 88% | 0 | 0 |
+| **Membrane, defaults** | **82 / 65** | **99%** | 0 | 0 |
+| Membrane, `recall_evicted_history=False` | 69 / 50 | 94% | 0 | 0 |
 
-Per scenario, Membrane defaults against the best trimming library:
+Per scenario, Membrane defaults against the best of the others. "Before" is the same suite on
+the release before thin-before-drop, the eviction index and incremental counting:
 
-| Scenario | Membrane recall | Best peer recall | Membrane cost |
-| --- | ---: | ---: | ---: |
-| 80-turn chat, facts asked up to 30 turns later | history 99% | 76% | 76 / 55 |
-| Tool calls, facts in old tool results | tool 73%, history 93% | 65%, 100% | 82 / 65 |
-| Up to 40 memories per turn, needed one at a random rank | memory 100%, history 100% | 100%, 50% | 87 / 72 |
-| Every answer needs a memory fact and a history fact | 98% | 100% | 82 / 64 |
-| Three 2,500-token pastes | paste 76%, history 76% | 60%, 60% | 87 / 78 |
-| 3,000-token budget | history 66% | 54% | 95 / 86 |
-| Memory flood with paraphrased questions | memory 96%, history 56% | 100%, 32% | 87 / 72 |
-| 24,000-token budget | 100% | 100% | 62 / 26 |
+| Scenario | Membrane recall | Before | Best peer recall | Membrane cost | Before |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 80-turn chat, facts asked up to 30 turns later | history 100% | 99% | 76% | 75 / 54 | 76 / 55 |
+| Tool calls, facts in old tool results | tool 100%, history 97% | 73%, 93% | 65%, 100% | 81 / 65 | 82 / 65 |
+| Up to 40 memories per turn, needed one at a random rank | memory 100%, history 93% | 100%, 100% | 100%, 50% | 88 / 74 | 87 / 72 |
+| Every answer needs a memory fact and a history fact | 97% | 98% | 100% | 83 / 65 | 82 / 64 |
+| Three 2,500-token pastes | paste 100%, history 100% | 76%, 76% | 60%, 60% | 86 / 75 | 87 / 78 |
+| 3,000-token budget | history 100% | 66% | 57% | 96 / 89 | 95 / 86 |
+| Memory flood with paraphrased questions | memory 100%, history 72% | 96%, 56% | 100%, 32% | 89 / 75 | 87 / 72 |
+| 24,000-token budget | 100% | 100% | 100% | 62 / 26 | 62 / 26 |
+| History fact spread over two sentences of one message | history 94% | 92% | 75% | 80 / 62 | 81 / 61 |
 
-Where Membrane is behind: old history facts in the tool scenario (93% against 100%), two-fact
-questions (98%), and memory recall when questions are paraphrased (96%). Membrane picks dropped
-history and surviving memories partly by the words they share with the question; most scenarios
-name what they ask for, which helps that. The paraphrase scenario removes the help.
+Where Membrane got worse or is behind:
+
+- History recall in the memory-flood scenario fell from 100% to 93%, and two-fact questions
+  from 98% to 97% (the others have 100% there, and 100% on old history in the tool scenario
+  against Membrane's 97%). The index takes its room out of the history share, so less history is
+  kept word for word, and a keyframe is one sentence chosen without seeing the question: when it
+  picks the wrong sentence and the passage recall also misses, the fact is gone.
+- It costs 1 to 3 points more in four scenarios (memory flood, two-fact, 3,000-token budget,
+  paraphrase), because the index and the keyframes fill room that used to stay empty.
+- With `recall_evicted_history=False` the index alone has to carry old history, and it is worse
+  than before in four scenarios: tool-scenario history 57% to 30%, memory flood 100% to 83%,
+  paraphrase 56% to 48%, split fact 72% to 49%. It is better in four (80-turn chat 60% to 92%,
+  two-fact 79% to 87%, pastes 28% to 100%, 3,000-token budget 54% to 86%) and unchanged with a
+  24,000-token budget.
+- Paraphrased questions about old history are still found only 72% of the time.
+- A fact spread over two sentences survives thinning only by luck: the split-fact scenario's
+  94% comes from history kept word for word and from recalled passages, not from keyframes, which
+  hold one sentence. The other scenarios state each fact in a single sentence, the best case for
+  keyframes.
+
+Membrane picks dropped history and surviving memories partly by the words they share with the
+question; most scenarios name what they ask for, which helps that. The paraphrase scenario
+removes the help. The benchmark text is synthetic and templated; nothing in the keyframe scoring
+was fitted to it.
 
 The peers put retrieved memories in the system message, as their RAG chat patterns do. Moving
-them next to the question by hand gives the same caching in any of them. Compile time is 4 to
-10 ms per turn at these sizes.
+them next to the question by hand gives the same caching in any of them. Median compile time is
+0.5 to 3.5 ms per turn at these sizes (0.9 ms on the 80-turn chat, down from 8.6 ms); a turn that
+moves the history cut can take 5 to 15 ms.
 
 ```bash
 uv run --extra langchain --extra llamaindex python -m benchmarks.hard_suite
 ```
 
-**Live run** ([`benchmarks/hard_suite_live.py`](benchmarks/hard_suite_live.py)): the same eight
-scenarios sent to `claude-opus-5-5` on 2026-11-10, one seed, 1,240 requests. Accuracy means the
-reply contained the fact. "Wrong" counts replies that stated a different code instead of saying
+**Live run** ([`benchmarks/hard_suite_live.py`](benchmarks/hard_suite_live.py)): the first eight
+scenarios sent to `claude-opus-5-5` on 2026-11-10, one seed, 1,240 requests. This run predates
+thin-before-drop, the eviction index and the cache-breakpoint helper, and it has not been
+repeated since, so it describes the previous release, not the offline numbers above. Accuracy
+means the reply contained the fact. "Wrong" counts replies that stated a different code instead of saying
 it was unknown. Cost uses Claude Opus 5.5 prices (cache writes 1.25×, reads 0.05×), relative to
 LangChain = 100. Mean over scenarios:
 
