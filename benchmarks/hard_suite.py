@@ -507,21 +507,23 @@ class PriomptRecent(Priompt):
 
 class Membrane:
     options: ClassVar[dict[str, Any]] = {}
+    model: ClassVar[str] = MODEL
 
     def __init__(self, budget: int, sc: Scenario) -> None:
         self._compiler = ContextCompiler(
             max_tokens=budget,
-            model_id=MODEL,
+            model_id=self.model,
             core_content=CORE,
             include_interrupt_instruction=False,
             **self.options,
         )
+        self.last_result: Any = None  # the live suite reads its cache breakpoints
 
     def build(self, turn: Turn, history: list[Message]) -> tuple[list[Message], bool]:
-        result = self._compiler.compile(
+        self.last_result = self._compiler.compile(
             memories=turn.memories, user_message=turn.user, conversation_messages=history
         )
-        return result.messages, False
+        return self.last_result.messages, False
 
 
 class MembraneLean(Membrane):

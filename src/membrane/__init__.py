@@ -9,6 +9,7 @@ from membrane.async_preflight import (
 )
 from membrane.cache_format import (
     CacheableBlock,
+    anthropic_request,
     anthropic_system_blocks,
     assemble_system_content,
     build_system_messages,
@@ -99,6 +100,7 @@ from membrane.provider_registry import (
     lookup_context_cap,
     get_full_capability_map,
     get_full_context_caps,
+    get_cache_pricing,
     has_prompt_caching,
     has_streaming_interrupt,
     reload_capability_maps,
@@ -156,6 +158,7 @@ __all__ = [
     "RankingWeights",
     "SecurityFlag",
     "SemanticMemory",
+    "anthropic_request",
     "anthropic_system_blocks",
     "as_preflight_analyst",
     "assemble_system_content",
@@ -175,6 +178,7 @@ __all__ = [
     "cosine_distance",
     "count_tokens",
     "embed_texts",
+    "get_cache_pricing",
     "get_capabilities_for_model",
     "get_context_cap_for_model",
     "get_current_environment_state",

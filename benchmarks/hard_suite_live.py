@@ -11,11 +11,14 @@ API and reports, per scenario and strategy:
   Cache reads are cheaper than 0.1x on some models, which widens the gaps.
 - ``errors``: requests the API rejected (for example a tool result split from its call).
 
-Every strategy gets a cache breakpoint after the core system prompt. Strategies whose
-system message is the core alone also get one after the last history message; where
-memories sit in the system message that breakpoint would be written every turn and never
-read, so it is left out. The ``paraphrase`` scenario's memory questions name projects by an
-alias no model can resolve, so they are sent (to keep the conversation intact) but not graded.
+Cache breakpoints: Membrane's requests are built by ``membrane.anthropic_request`` from the
+breakpoints the compiler reports (after the core; after the history when the cache prices
+say that pays), compiled with the live model's id so its cache prices and minimum apply.
+The other strategies get a breakpoint after the core system prompt, and one after the last
+history message when their system message is the core alone; where memories sit in the
+system message that breakpoint would be written every turn and never read, so it is left
+out. The ``paraphrase`` scenario's memory questions name projects by an alias no model can
+resolve, so they are sent (to keep the conversation intact) but not graded.
 
 Assistant turns stay scripted so all strategies see the same
 history. Budgets are enforced in tiktoken tokens for every strategy; Claude's own counts are
@@ -41,10 +44,11 @@ from typing import Any
 
 from benchmarks import hard_suite as hs
 from benchmarks.peer_comparison import CORE
+from membrane.cache_format import to_anthropic_params
 
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_STRATEGIES = "langchain,llamaindex-memory,membrane,membrane-lean"
-CACHE = {"type": "ephemeral"}
+CACHE = {"type": "ephemeral"}  # what membrane.cache_format places at a breakpoint
 TOOLS = [
     {
         "name": "lookup_badge",
@@ -59,51 +63,44 @@ TOOLS = [
 _CODE = re.compile(r"\b[DLBV]\d{6}\b")
 
 
-def to_claude(messages: list[hs.Message], with_tools: bool) -> dict[str, Any]:
-    """OpenAI-style chat messages as Messages API parameters, with cache breakpoints."""
-    params: dict[str, Any] = {}
-    rest = messages
-    if messages and messages[0].get("role") == "system":
-        text, rest = str(messages[0]["content"]), messages[1:]
-        if text.startswith(CORE) and text[len(CORE) :].strip():
-            # Core is stable across turns; whatever follows it (memories) is not.
-            params["system"] = [
-                {"type": "text", "text": CORE, "cache_control": CACHE},
-                {"type": "text", "text": text[len(CORE) :]},
-            ]
-        else:
-            params["system"] = [{"type": "text", "text": text, "cache_control": CACHE}]
-    out: list[dict[str, Any]] = []
-    for m in rest:
-        if m.get("role") == "tool":
-            block = {
-                "type": "tool_result",
-                "tool_use_id": m["tool_call_id"],
-                "content": str(m.get("content") or ""),
-            }
-            out.append({"role": "user", "content": [block]})
-        elif m.get("tool_calls"):
-            calls = [
-                {
-                    "type": "tool_use",
-                    "id": c["id"],
-                    "name": c["function"]["name"],
-                    "input": json.loads(c["function"]["arguments"]),
-                }
-                for c in m["tool_calls"]
-            ]
-            out.append({"role": "assistant", "content": calls})
-        else:
-            text_block = {"type": "text", "text": str(m.get("content") or "")}
-            out.append({"role": m["role"], "content": [text_block]})
-    # A breakpoint after history only pays when everything before it is stable. With
-    # memories in the system message it would be written every turn and never read.
-    if len(out) >= 2 and len(params.get("system", [])) <= 1:
-        out[-2]["content"][-1]["cache_control"] = CACHE
-    params["messages"] = out
+def peer_breakpoints(messages: list[hs.Message]) -> list[dict[str, Any]]:
+    """Breakpoints for a strategy that reports none: after the core, and after the history
+    when everything before it is stable."""
+    if not messages or messages[0].get("role") != "system":
+        return [{"message_index": len(messages) - 2}] if len(messages) >= 2 else []
+    text = str(messages[0]["content"])
+    if text.startswith(CORE) and text[len(CORE) :].strip():
+        # Core is stable across turns; whatever follows it (memories) is not, and a
+        # breakpoint after history would be written every turn and never read.
+        return [{"message_index": 0, "chars": len(CORE)}]
+    points: list[dict[str, Any]] = [{"message_index": 0}]
+    if len(messages) >= 3:
+        points.append({"message_index": len(messages) - 2})
+    return points
+
+
+def to_claude(
+    messages: list[hs.Message],
+    with_tools: bool,
+    breakpoints: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """OpenAI-style chat messages as Messages API parameters, with cache breakpoints:
+    the ones given (Membrane reports its own), else :func:`peer_breakpoints`."""
+    if breakpoints is None:
+        breakpoints = peer_breakpoints(messages)
+    params = to_anthropic_params(messages, breakpoints)
     if with_tools:
         params["tools"] = TOOLS
     return params
+
+
+def for_model(cls: type, model: str) -> type:
+    """A Membrane strategy compiled for the live model, so the breakpoints it reports use
+    that model's cache prices and minimum cacheable size."""
+    if not issubclass(cls, hs.Membrane):
+        return cls
+    model_id = model if "/" in model else f"anthropic/{model}"
+    return type(cls.__name__, (cls,), {"model": model_id})
 
 
 @dataclass
@@ -132,10 +129,12 @@ def run_live(
     """One conversation, turn by turn, so each request can read the previous one's cache."""
     import anthropic
 
-    strategy, score = cls(sc.budget, sc), LiveScore()
+    strategy, score = for_model(cls, model)(sc.budget, sc), LiveScore()
     history: list[hs.Message] = []
     for turn in turns:
         messages, _ = strategy.build(turn, history)
+        result = getattr(strategy, "last_result", None)
+        breakpoints = result.metadata.get("cache_breakpoints", []) if result else None
         score.requests += 1
         reply = ""
         try:
@@ -143,7 +142,7 @@ def run_live(
                 model=model,
                 max_tokens=2048,
                 output_config={"effort": "low"},
-                **to_claude(messages, with_tools=bool(sc.tool_every)),
+                **to_claude(messages, bool(sc.tool_every), breakpoints),
             )
         except anthropic.BadRequestError:
             score.errors += 1

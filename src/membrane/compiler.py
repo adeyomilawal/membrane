@@ -51,7 +51,12 @@ from membrane.observability.profiler import LatencyProfiler
 from membrane.lod import compute_attention_shift
 from membrane.memory_protocol import infer_memory_kind, normalize_compile_memories
 from membrane.metrics import CompileMetrics, MetricsCallback, build_compile_metrics
-from membrane.provider_registry import has_prompt_caching, lookup_context_cap
+from membrane.provider_registry import (
+    CachePricing,
+    get_cache_pricing,
+    has_prompt_caching,
+    lookup_context_cap,
+)
 from membrane.ref_map import set_ref_map_for_conversation
 from membrane.runtime.signals import Signal, SignalKind
 
@@ -687,6 +692,50 @@ def _thin_forms(
     return out
 
 
+def _history_cache_pays(pricing: CachePricing, expected_reads: float) -> bool:
+    """Whether writing the history to the cache is expected to cost less than not doing so.
+
+    A cut rewrites everything after the core, so history written to the cache is only worth
+    its write premium if it is read back before the next cut. With automatic caching there
+    is no premium and nothing to decide.
+    """
+    if not pricing.marked or pricing.write <= 1.0:
+        return True
+    return expected_reads * (1.0 - pricing.read) >= pricing.write - 1.0
+
+
+def _turns_until_cut(
+    history: list[dict[str, Any]], sizes: list[int], dropped: int, limit: int, step: int
+) -> list[float]:
+    """For each request sent since the current cut, oldest first and ending with this one:
+    how many more turns its history was expected to last before the next cut (the room left
+    on the grid over the mean size of a kept turn).
+
+    A request is one user message with the history before it, so the earlier requests are
+    the prefixes of ``history`` that end just before a user message.
+    """
+
+    def boundary(total: int) -> int:
+        return 0 if total <= limit else -(-(total - limit) // step) * step
+
+    total = sum(sizes)
+    now = boundary(total)
+    kept_from = total - sum(sizes[dropped:])
+    turns = sum(1 for m in history[dropped:] if m.get("role") == "user")
+    end = len(history)
+    out: list[float] = []
+    while turns > 0 and boundary(total) == now:
+        out.append((limit + now - total) / max(1.0, (total - kept_from) / turns))
+        # Step back one request: everything from the last user message on was not there yet.
+        last = end - 1
+        while last > dropped and history[last].get("role") != "user":
+            last -= 1
+        total -= sum(sizes[last:end])
+        end = last
+        turns -= 1
+    return out[::-1]
+
+
 def _message_text(message: dict[str, Any]) -> str:
     """Text used for token counting of a history message."""
     content = message.get("content")
@@ -891,6 +940,18 @@ class ContextCompiler:
     where the core ends inside the system message. Passage recall above still returns
     matching passages in full.
 
+    When the model caches prompts, ``metadata["cache_breakpoints"]`` lists where a cached
+    prefix ends, as ``{"message_index", "tokens", "reason"}`` (plus ``"chars"`` when the
+    prefix ends inside the message): after the core, and after the history. Providers that
+    cache automatically need nothing more. For providers that need markers (Anthropic),
+    :func:`membrane.cache_format.anthropic_request` builds the request with them placed.
+    The history is marked only when the cache prices say it pays: a cut rewrites the
+    history, so it must be read back before the next cut to earn its write premium. The
+    expected number of reads is the room left before the next cut over the mean size of a
+    kept turn (``metadata["history_cache_expected_reads"]``). Once a request since the cut
+    has marked it, later ones keep the marker, which then reads what is cached. Prices and
+    minimum cacheable sizes come from the capability map (``cache_pricing``).
+
     With ``thin_before_drop`` (default, end placement) no memory is dropped while another
     still has its full text. Every memory has a keyframe: its densest sentence under
     ``keyframe_tokens`` (mean rarity of its words over the sentences of the memories on offer
@@ -1014,6 +1075,7 @@ class ContextCompiler:
         evicted: list[dict[str, Any]] = []
         full_history = history
         index_lines: tuple[str, ...] = ()
+        until_cut: list[float] | None = None  # see _turns_until_cut; None when never trimmed
         if self.trim_history and history:
             # Stable inputs only (budget, core, framing), so the grid never moves between turns.
             base = max(0, max_tok - fixed_framing - count_fn(core_text))
@@ -1030,6 +1092,10 @@ class ContextCompiler:
                 history, limit, count_fn, step=step, sizes=sizes
             )
             evicted = full_history[:history_dropped]
+            if history:
+                until_cut = _turns_until_cut(
+                    full_history, sizes, history_dropped, history_limit, step
+                )
             if indexing and evicted:
                 index_lines = self._index_lines(
                     full_history, sizes, step, history_dropped, count_fn, index_budget, count_key
@@ -1151,12 +1217,44 @@ class ContextCompiler:
                 max_tok,
             )
             cache_meta["budget_exceeded"] = True
-        if caching and prefix_tokens >= MIN_CACHEABLE_PREFIX_TOKENS:
+        pricing = (get_cache_pricing(self.model_id) or CachePricing()) if caching else None
+        if pricing is not None and prefix_tokens >= pricing.min_tokens:
             cache_meta.update(
                 prompt_cache_used=True,
                 cacheable_prefix_tokens=prefix_tokens,
                 dynamic_tail_tokens=tail_tokens,
             )
+        if pricing is not None:
+            # Where a cached prefix ends: after the core (stable for the whole conversation)
+            # and after the history (stable until the next cut).
+            points: list[dict[str, Any]] = []
+            core_tokens = count_fn(core_text)
+            if core_text.strip() and core_tokens >= pricing.min_tokens:
+                points.append(
+                    {
+                        "message_index": 0,
+                        "chars": len(core_text),
+                        "tokens": core_tokens,
+                        "reason": "core",
+                    }
+                )
+            if history and prefix_tokens >= pricing.min_tokens:
+                # Mark when this history is expected to be read before the next cut, or when
+                # an earlier request since the cut already wrote it: then the marker reads
+                # that entry and only writes the turn added since.
+                pays = not until_cut or any(_history_cache_pays(pricing, t) for t in until_cut)
+                if until_cut:
+                    cache_meta["history_cache_expected_reads"] = round(until_cut[-1], 2)
+                if pays:
+                    points.append(
+                        {
+                            "message_index": len(messages) - 2,
+                            "tokens": prefix_tokens,
+                            "reason": "history",
+                        }
+                    )
+            cache_meta["cache_mode"] = pricing.mode
+            cache_meta["cache_breakpoints"] = points
         return messages, cache_meta, ref_map_kept, prefix_tokens + tail_tokens, fw_stats
 
     def _index_lines(
@@ -2138,7 +2236,7 @@ class ContextCompiler:
         return result
 
 
-# OpenAI and Anthropic only cache prefixes of at least this many tokens.
+# The usual shortest cacheable prefix; the capability map has each model's own minimum.
 MIN_CACHEABLE_PREFIX_TOKENS = 1024
 
 
@@ -2159,12 +2257,22 @@ def _build_output_messages(
         return messages, cache_meta
     prefix = prefix_text if prefix_text.strip() and final_text.startswith(prefix_text) else ""
     prefix_tokens = count_tokens(prefix)
-    if prefix_tokens >= MIN_CACHEABLE_PREFIX_TOKENS:
+    pricing = get_cache_pricing(model_id) or CachePricing()
+    if prefix_tokens >= pricing.min_tokens:
         cache_meta = {
             "prompt_cache_used": True,
             "cacheable_prefix_chars": len(prefix),
             "cacheable_prefix_tokens": prefix_tokens,
             "dynamic_tail_tokens": count_tokens(final_text[len(prefix):]),
+            "cache_mode": pricing.mode,
+            "cache_breakpoints": [
+                {
+                    "message_index": 0,
+                    "chars": len(prefix),
+                    "tokens": prefix_tokens,
+                    "reason": "core",
+                }
+            ],
         }
     return messages, cache_meta
 

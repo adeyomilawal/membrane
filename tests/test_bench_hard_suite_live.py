@@ -117,3 +117,21 @@ def test_paraphrase_memory_questions_are_sent_but_not_graded():
     graded = sum(len(v) for s in scores["membrane"] for v in s.correct.values())
     assert graded < sc.turns
     assert row["wrong"] <= graded
+
+
+def test_membrane_requests_carry_the_breakpoints_the_compiler_reports():
+    sc = BY_NAME["tiny"]
+    client = FakeClient()
+    live.run_scenario(sc, 1, {"membrane": hs.Membrane}, client, "claude-opus-5-5", workers=1)
+    assert live.for_model(hs.Membrane, "claude-opus-5-5").model == "anthropic/claude-opus-5-5"
+    assert live.for_model(hs.Naive, "claude-opus-5-5") is hs.Naive
+    marked_history = 0
+    for request in client.requests:
+        system = request["system"]
+        assert system[0] == {"type": "text", "text": CORE, "cache_control": live.CACHE}
+        assert all("cache_control" not in block for block in system[1:])
+        blocks = [b for m in request["messages"] for b in m["content"]]
+        assert "cache_control" not in blocks[-1]
+        marked_history += sum("cache_control" in b for b in blocks)
+    # At 3,000 tokens a cut comes every turn or two: history is marked on some turns only.
+    assert 0 < marked_history < len(client.requests)
