@@ -86,8 +86,7 @@ class EstimationAdapter:
         return "estimation"
 
     def encode(self, text: str) -> list[int]:
-        n = max(1, int(len(text) / self._cpt))
-        return list(range(n))
+        return list(range(self.count(text)))
 
     def decode(self, tokens: list[int]) -> str:
         return ""

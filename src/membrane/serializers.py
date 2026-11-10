@@ -210,8 +210,8 @@ class DenseSerializer:
         if desc:
             lines.append(f"Description: {desc}")
         steps = getattr(procedure, "steps", []) or []
-        for s in steps:
-            step_num = getattr(s, "step_number", len(lines))
+        for i, s in enumerate(steps, start=1):
+            step_num = getattr(s, "step_number", i)
             action = getattr(s, "action", None) or getattr(s, "description", "") or ""
             outcome = getattr(s, "expected_outcome", "") or ""
             lines.append(f"  Step {step_num}: {str(action).strip()}")

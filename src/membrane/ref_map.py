@@ -28,7 +28,7 @@ def _deserialize_ref_maps(data: str) -> tuple[dict[int, str], dict[int, str]]:
         ref_map = {int(k): v for k, v in (obj.get("ref_map") or {}).items()}
         ref_map_type = {int(k): v for k, v in (obj.get("ref_map_type") or {}).items()}
         return ref_map, ref_map_type
-    except (json.JSONDecodeError, ValueError) as e:
+    except (json.JSONDecodeError, ValueError, AttributeError, TypeError) as e:
         logger.warning("ref_map deserialize failed: %s", e)
         return {}, {}
 

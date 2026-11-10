@@ -2,8 +2,12 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.1] — 2026-11-10
 
+- Raise test coverage from 68% to 88%; CI now fails below 80%.
+- Fix step numbering in `DenseSerializer` full prose: steps without a `step_number` were numbered by output line instead of position.
+- `EstimationAdapter.encode("")` returns no tokens, matching `count("")`.
+- Stored ref maps that are valid JSON but not an object are ignored instead of raising.
 - Ship a `py.typed` marker so type checkers use Membrane's annotations.
 - Link the project website from the package metadata and README.
 

@@ -56,4 +56,4 @@ jobs:
 
       - name: Pytest (full)
         if: matrix.install == 'dev'
-        run: python -m pytest
+        run: python -m pytest --cov=membrane --cov-report=term --cov-fail-under=80
