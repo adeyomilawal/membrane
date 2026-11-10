@@ -1,6 +1,6 @@
 """Hard benchmark suite: Membrane against real context-management products.
 
-Eight stress scenarios, five seeds each, every strategy fed the same core prompt, retrieved
+Nine stress scenarios, five seeds each, every strategy fed the same core prompt, retrieved
 memories, conversation history and token budget. All offline and deterministic.
 
 Products under test:
@@ -87,6 +87,7 @@ class Scenario:
     multi: bool = False  # every question needs a memory fact and a history fact
     paste_turns: tuple[int, ...] = ()  # turns where the user pastes a long document
     paraphrase: bool = False  # questions share no rare word with the fact they ask for
+    split_fact: bool = False  # the history fact is spread over two sentences of its message
 
 
 SCENARIOS = (
@@ -118,6 +119,10 @@ SCENARIOS = (
         lookbacks=(4, 12), paraphrase=True,
     ),
     Scenario("roomy", "24,000-token budget, nothing needs dropping", 40, 24_000, 8),
+    Scenario(
+        "split-fact", "history facts spread over two sentences of one message", 40, 6_000, 8,
+        lookbacks=(3, 8, 15), history_every=2, split_fact=True,
+    ),
 )
 
 
@@ -128,6 +133,9 @@ class Turn:
     needles: tuple[str, ...]
     kind: str  # memory | history | tool | paste | multi
     memories: list[MemoryItem] = field(default_factory=list)
+    # What must be in the prompt for the answer to be derivable, when that is more than the
+    # answer itself (a fact split over two sentences needs both).
+    evidence: tuple[str, ...] = ()
 
 
 _ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
@@ -158,6 +166,7 @@ def build_scenario(sc: Scenario, seed: int) -> list[Turn]:
     locker = [fresh("L") for _ in range(sc.turns)]
     badge = [fresh("B") for _ in range(sc.turns)]
     vault = {p: fresh("V") for p in sc.paste_turns}
+    gate = [fresh("G") for _ in range(sc.turns)] if sc.split_fact else []
 
     def is_tool_turn(t: int) -> bool:
         return bool(sc.tool_every) and t % sc.tool_every == 0
@@ -200,7 +209,16 @@ def build_scenario(sc: Scenario, seed: int) -> list[Turn]:
             )
 
         filler = " ".join(f"note{t}-{k}" for k in range(rng.randint(5, 60)))
-        user = f"{ask} Context for later: {filler}. My locker code for trip {t} is {locker[t]}."
+        evidence: tuple[str, ...] = ()
+        if sc.split_fact:
+            # The trip is named in one sentence and the code in the next; either alone is
+            # useless, so both must reach the prompt.
+            fact = f"Trip {t} went through gate {gate[t]}. The locker code I used there is"
+            if kind == "history":
+                evidence = (gate[source], locker[source])
+        else:
+            fact = f"My locker code for trip {t} is"
+        user = f"{ask} Context for later: {filler}. {fact} {locker[t]}."
         if t in sc.paste_turns:
             clauses = [f"Clause {i} of the agreement stays in force." for i in range(250)]
             clauses.insert(rng.randrange(250), f"The vault code in document {t} is {vault[t]}.")
@@ -237,7 +255,7 @@ def build_scenario(sc: Scenario, seed: int) -> list[Turn]:
             )
             for i, p in enumerate(picked)
         ]
-        turns.append(Turn(user, follow, needles, kind, memories))
+        turns.append(Turn(user, follow, needles, kind, memories, evidence))
     return turns
 
 
@@ -570,7 +588,8 @@ def run(cls: type, sc: Scenario, turns: list[Turn]) -> Score:
         score.cached += cache_hit(previous, messages)
         previous = messages
         text = _text(messages)
-        score.recall.setdefault(turn.kind, []).append(all(n in text for n in turn.needles))
+        wanted = turn.evidence or turn.needles
+        score.recall.setdefault(turn.kind, []).append(all(n in text for n in wanted))
         history = [*history, {"role": "user", "content": turn.user}, *turn.follow]
     return score
 
