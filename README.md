@@ -768,7 +768,10 @@ Priompt's priority-cutoff search rather than importing the package.
 | **Membrane, defaults** | **58%** | 0 | 100% / 100% | **82 / 63** |
 | Membrane, `memory_placement="system"` | 56% | 0 | 100% / 0% | 41 / 32 |
 
-With a 12,000-token budget Membrane caches 81% and costs 68 / 35. Under memory pressure
+History recall matched naive at every lookback tested (4 to 22 turns back). Past what the budget
+holds, both lose the fact. Recall costs tokens: with `recall_evicted_history=False` the 6,000-token
+run caches 68% and costs 64 / 43, but finds none of the history facts. With a 12,000-token budget
+Membrane caches 81% and costs 68 / 35. Under memory pressure
 (4,000 tokens, 40 memories) it still costs less (88 / 75), but it keeps fewer memories: 76%
 memory recall against 95% for naive, which makes room by discarding all history. Lower
 `history_share` for memory-heavy apps.

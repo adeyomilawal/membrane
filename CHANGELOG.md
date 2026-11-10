@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Default output changes for end placement (history cut, tail layout), so release as 0.3.0.
+
+- The budget now covers provider message framing: `message_overhead_tokens` (default 3, OpenAI chat framing) per message plus reply priming, so the billed request stays under `max_tokens`. `token_count` stays content-only; `metadata["message_framing_tokens"]` reports the reserve.
+- End placement: the history cut depends only on the budget, the core and framing (`history_share`, default 0.75), on a fixed chunk grid. It no longer shifts with each turn's memories or question, so the cached prefix breaks less often.
+- End placement: the most recently dropped history chunk returns in the tail as low-priority recall (`recall_evicted_history=True`, `metadata["history_messages_recalled"]`). It is trimmed before any memory, skips tool messages, and never enters `ref_map`.
+- New `benchmarks/peer_comparison.py`: naive concatenation, a Priompt-style priority cutoff, and Membrane under a hard budget, with an opt-in `--live` mode against OpenAI.
+
 ## [0.2.1] — 2026-11-10
 
 - Raise test coverage from 68% to 88%; CI now fails below 80%.
