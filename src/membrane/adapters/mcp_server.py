@@ -3,7 +3,7 @@ MCP (Model Context Protocol) server exposing Membrane as tools + resources.
 
 Install: ``pip install membrane-aol[mcp]`` (requires ``mcp>=1.0``).
 
-Run (stdio, for Cursor / Claude Desktop):
+Run (stdio, for MCP clients):
 
 .. code-block:: bash
 
