@@ -202,6 +202,9 @@ PREFLIGHT_ANALYST_SYSTEM = (
     "- Stay strictly under the requested token limit (dense, no filler)."
 )
 
+# OpenAI chat framing: tokens billed per message on top of content (and once for priming).
+DEFAULT_MESSAGE_OVERHEAD_TOKENS = 3
+
 MEMORY_PLACEMENT_SYSTEM = "system"
 MEMORY_PLACEMENT_END = "end"
 MEMORY_PLACEMENTS = (MEMORY_PLACEMENT_SYSTEM, MEMORY_PLACEMENT_END)
@@ -627,6 +630,12 @@ class ContextCompiler:
     when it would crowd out the budget, leaving a quarter of the remaining room for
     memories; ``metadata["history_messages_dropped"]`` reports how many. Turn it off to
     manage history yourself; an overrun then sets ``metadata["budget_exceeded"] = True``.
+
+    ``message_overhead_tokens`` is what the provider bills per chat message on top of its
+    content (3 for OpenAI chat models), plus the same again once for reply priming. The
+    budget reserves it so the billed request stays under ``max_tokens``;
+    ``metadata["token_count"]`` stays content-only and ``metadata["message_framing_tokens"]``
+    reports the reserve. Set it to 0 to budget content only.
     """
 
     max_tokens: int
@@ -637,6 +646,7 @@ class ContextCompiler:
     metrics_callback: MetricsCallback | None = None
     memory_placement: str = MEMORY_PLACEMENT_END
     trim_history: bool = True
+    message_overhead_tokens: int = DEFAULT_MESSAGE_OVERHEAD_TOKENS
 
     def __post_init__(self) -> None:
         if self.memory_placement not in MEMORY_PLACEMENTS:
@@ -670,7 +680,7 @@ class ContextCompiler:
         history form a byte-stable prefix across turns.
         """
         caching = use_split and bool(self.model_id and has_prompt_caching(self.model_id))
-        firewall = PreFlightContextFirewall(max_tokens=max_tok, count_fn=count_fn)
+        overhead = max(0, self.message_overhead_tokens)
         directives_block = layout.build_directives_block()
 
         if self.memory_placement == MEMORY_PLACEMENT_SYSTEM:
@@ -679,6 +689,9 @@ class ContextCompiler:
                 or _last_turn_from_messages(conversation_messages),
                 user_message=user_message,
             )
+            # One message plus reply priming.
+            framing = 2 * overhead
+            firewall = PreFlightContextFirewall(max_tokens=max_tok - framing, count_fn=count_fn)
             # Directives go last but are reserved with the end block so they fit the budget.
             final_text, ref_map_kept, _, fw_stats = firewall.run(
                 core_text=core_text,
@@ -694,7 +707,9 @@ class ContextCompiler:
             messages, cache_meta = _build_output_messages(
                 self.model_id, final_text, caching, prefix_text=core_text
             )
-            if total_tokens > max_tok:
+            if framing:
+                cache_meta["message_framing_tokens"] = framing
+            if total_tokens + framing > max_tok:
                 cache_meta["budget_exceeded"] = True
             return messages, cache_meta, ref_map_kept, total_tokens, fw_stats
 
@@ -705,12 +720,21 @@ class ContextCompiler:
             user_message=user_message,
         )
         history_dropped = 0
+        # System message (when there is one), the final user message, and reply priming.
+        fixed_framing = overhead * ((1 if core_text.strip() else 0) + 2)
         if self.trim_history and history:
             # Leave room for memories: history may take all but a quarter of what is left.
-            available = max_tok - count_fn(core_text) - count_fn(end_text + directives_block)
+            available = (
+                max_tok - fixed_framing - count_fn(core_text)
+                - count_fn(end_text + directives_block)
+            )
             offered = sum(count_fn(seg) for seg, _ in middle_segments)
             history_limit = available - min(offered, max(0, available) // 4)
-            history, history_dropped = _trim_history_chunked(history, history_limit, count_fn)
+            history, history_dropped = _trim_history_chunked(
+                history, history_limit, lambda text: count_fn(text) + overhead
+            )
+        framing = fixed_framing + overhead * len(history)
+        firewall = PreFlightContextFirewall(max_tokens=max_tok - framing, count_fn=count_fn)
         history_text = "\n\n".join(_message_text(m) for m in history)
         # History is part of the cached prefix: reserved here, only trimmed above in chunks.
         # Directives ride in the final user message, so they are reserved too.
@@ -741,7 +765,9 @@ class ContextCompiler:
             "stable_prefix_messages": len(system) + len(history),
             "history_messages_dropped": history_dropped,
         }
-        if prefix_tokens + tail_tokens > max_tok:
+        if framing:
+            cache_meta["message_framing_tokens"] = framing
+        if prefix_tokens + tail_tokens + framing > max_tok:
             logger.warning(
                 "memory_placement=end: system+history+end (%s tokens) exceeds max_tokens (%s); "
                 "shorten conversation_messages or enable trim_history",
