@@ -825,6 +825,10 @@ them next to the question by hand gives the same caching in any of them. Compile
 uv run --extra langchain --extra llamaindex python -m benchmarks.hard_suite
 ```
 
+[`benchmarks/hard_suite_live.py`](benchmarks/hard_suite_live.py) sends the same requests to the
+Claude API and reports real answer accuracy and prompt-cache reads. It needs credentials and
+costs API credits (about 1,300 requests and 7M prompt tokens by default).
+
 Also in `benchmarks/`: `token_savings_bench.py` (savings from compression and trimming) and
 `trimming_bench.py` (trimming keeps high-priority content and the U-shaped layout).
 
