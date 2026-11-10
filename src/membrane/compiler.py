@@ -204,6 +204,10 @@ PREFLIGHT_ANALYST_SYSTEM = (
 
 # OpenAI chat framing: tokens billed per message on top of content (and once for priming).
 DEFAULT_MESSAGE_OVERHEAD_TOKENS = 3
+# End placement: share of the budget after the core that history may hold in the prefix.
+DEFAULT_HISTORY_SHARE = 0.75
+_EARLIER_HEADER = "--- Earlier conversation ---"
+_MEMORIES_HEADER = "--- Memories ---"
 
 MEMORY_PLACEMENT_SYSTEM = "system"
 MEMORY_PLACEMENT_END = "end"
@@ -431,6 +435,7 @@ def _trim_history_chunked(
     history: list[dict[str, Any]],
     limit: int,
     count_fn: Callable[[str], int],
+    step: int | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Drop the oldest messages so the rest fits ``limit``; return (kept, dropped count).
 
@@ -438,7 +443,8 @@ def _trim_history_chunked(
     conversation. History is append-only, so the cut stays put while new turns arrive and
     only jumps when another half-limit of history has built up: the cached prefix breaks
     once per jump instead of every turn. The kept history always starts on a user message
-    so tool results are never separated from their call.
+    so tool results are never separated from their call. Pass ``step`` to keep the grid
+    fixed while ``limit`` varies.
     """
     sizes = [count_fn(_message_text(m)) for m in history]
     total = sum(sizes)
@@ -446,7 +452,7 @@ def _trim_history_chunked(
         return history, 0
     if limit <= 0:
         return [], len(history)
-    step = max(1, limit // 2)
+    step = max(1, step if step is not None else limit // 2)
     boundary = -(-(total - limit) // step) * step  # round up to the grid
     start, seen = 0, 0
     while start < len(history) and seen < boundary:
@@ -455,6 +461,21 @@ def _trim_history_chunked(
     while start < len(history) and history[start].get("role") != "user":
         start += 1
     return history[start:], start
+
+
+def _evicted_segment(message: dict[str, Any]) -> str | None:
+    """Plain-text excerpt of an evicted history message for the sacrifice zone.
+
+    Tool calls and results are skipped (they make no sense out of order). ``[Mem:`` is
+    neutralized so an old citation never claims a ref in this turn's ``ref_map``.
+    """
+    role = message.get("role")
+    content = message.get("content")
+    if role == "tool" or message.get("tool_calls") or not isinstance(content, str):
+        return None
+    if not content.strip():
+        return None
+    return f"[Earlier {role}] " + content.strip().replace("[Mem:", "[mem:")
 
 
 def _message_text(message: dict[str, Any]) -> str:
@@ -626,10 +647,19 @@ class ContextCompiler:
     sends less (only the last turn of history) but memories change every turn, so the
     provider cache cannot hit past the core; it suits local models and one-off calls.
 
-    With ``trim_history`` (default) end placement drops the oldest history in large chunks
-    when it would crowd out the budget, leaving a quarter of the remaining room for
-    memories; ``metadata["history_messages_dropped"]`` reports how many. Turn it off to
-    manage history yourself; an overrun then sets ``metadata["budget_exceeded"] = True``.
+    With ``trim_history`` (default) end placement keeps history within ``history_share`` of
+    the budget left after the core, dropping the oldest messages in chunks of half that
+    share. The cut depends only on the budget and the core, never on this turn's memories or
+    question, so it stays put while the conversation grows and the cached prefix breaks only
+    when another chunk is dropped. ``metadata["history_messages_dropped"]`` reports how
+    many. Turn it off to manage history yourself; an overrun then sets
+    ``metadata["budget_exceeded"] = True``.
+
+    With ``recall_evicted_history`` (default) dropped messages are not lost: they join the
+    sacrifice zone as low-priority episodic segments, most recently dropped first, up to one
+    chunk (half the history limit), in whatever room the memories leave. They are trimmed
+    before any memory and never enter ``ref_map``;
+    ``metadata["history_messages_recalled"]`` reports how many survived.
 
     ``message_overhead_tokens`` is what the provider bills per chat message on top of its
     content (3 for OpenAI chat models), plus the same again once for reply priming. The
@@ -646,9 +676,13 @@ class ContextCompiler:
     metrics_callback: MetricsCallback | None = None
     memory_placement: str = MEMORY_PLACEMENT_END
     trim_history: bool = True
+    history_share: float = DEFAULT_HISTORY_SHARE
+    recall_evicted_history: bool = True
     message_overhead_tokens: int = DEFAULT_MESSAGE_OVERHEAD_TOKENS
 
     def __post_init__(self) -> None:
+        if not 0.0 <= self.history_share <= 1.0:
+            raise ValueError(f"history_share must be within [0, 1], got {self.history_share!r}")
         if self.memory_placement not in MEMORY_PLACEMENTS:
             raise ValueError(
                 f"memory_placement must be one of {MEMORY_PLACEMENTS}, "
@@ -722,19 +756,43 @@ class ContextCompiler:
         history_dropped = 0
         # System message (when there is one), the final user message, and reply priming.
         fixed_framing = overhead * ((1 if core_text.strip() else 0) + 2)
+        evicted: list[dict[str, Any]] = []
         if self.trim_history and history:
-            # Leave room for memories: history may take all but a quarter of what is left.
-            available = (
-                max_tok - fixed_framing - count_fn(core_text)
-                - count_fn(end_text + directives_block)
-            )
-            offered = sum(count_fn(seg) for seg, _ in middle_segments)
-            history_limit = available - min(offered, max(0, available) // 4)
+            # Stable inputs only (budget, core, framing), so the grid never moves between turns.
+            base = max(0, max_tok - fixed_framing - count_fn(core_text))
+            history_limit = int(base * self.history_share)
+            # Extra grid steps only when this turn's own end block would not fit.
+            limit = min(history_limit, base - count_fn(end_text + directives_block))
+            full_history = history
             history, history_dropped = _trim_history_chunked(
-                history, history_limit, lambda text: count_fn(text) + overhead
+                history,
+                limit,
+                lambda text: count_fn(text) + overhead,
+                step=max(1, history_limit // 2),
             )
+            evicted = full_history[:history_dropped]
+        recalled_texts: set[str] = set()
+        if self.recall_evicted_history and evicted:
+            # At most one chunk (the most recently dropped one) comes back, so recall does
+            # not inflate every request to the full budget.
+            recall_cap, recalled = max(1, history_limit // 2), []
+            for text in filter(None, map(_evicted_segment, reversed(evicted))):
+                recall_cap -= count_fn(text)
+                if recall_cap < 0:
+                    break
+                recalled.append(text)
+            recalled_texts = set(recalled)
+            middle_segments = [*middle_segments, *((t, TIER_EPISODIC) for t in recalled)]
+            if segment_weights is not None:
+                floor = min(segment_weights, default=0.0) - 1.0
+                segment_weights = [*segment_weights, *([floor] * len(recalled))]
         framing = fixed_framing + overhead * len(history)
-        firewall = PreFlightContextFirewall(max_tokens=max_tok - framing, count_fn=count_fn)
+        headers = 0
+        if recalled_texts:
+            headers = count_fn(f"{_EARLIER_HEADER}\n{_MEMORIES_HEADER}\n")
+        firewall = PreFlightContextFirewall(
+            max_tokens=max_tok - framing - headers, count_fn=count_fn
+        )
         history_text = "\n\n".join(_message_text(m) for m in history)
         # History is part of the cached prefix: reserved here, only trimmed above in chunks.
         # Directives ride in the final user message, so they are reserved too.
@@ -752,6 +810,10 @@ class ContextCompiler:
             pinned_tiers=pinned_tiers,
         )
         kept = list(fw_stats.pop("kept_segments", []))
+        earlier = [seg for seg in kept if seg in recalled_texts][::-1]  # chronological
+        kept = [seg for seg in kept if seg not in recalled_texts]
+        if earlier:
+            kept = [_EARLIER_HEADER, *earlier, _MEMORIES_HEADER, *kept]
         tail = ("\n".join(kept) + "\n\n" + end_text) if kept else end_text
         tail += directives_block
         # Some providers reject an empty system message.
@@ -765,6 +827,8 @@ class ContextCompiler:
             "stable_prefix_messages": len(system) + len(history),
             "history_messages_dropped": history_dropped,
         }
+        if recalled_texts:
+            cache_meta["history_messages_recalled"] = len(earlier)
         if framing:
             cache_meta["message_framing_tokens"] = framing
         if prefix_tokens + tail_tokens + framing > max_tok:

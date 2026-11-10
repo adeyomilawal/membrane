@@ -305,9 +305,13 @@ With the default `memory_placement="end"`, the compiler emits:
 3. one user message with the kept memories, the current turn and any dynamic directives.
 
 Items 1 and 2 are byte-identical from turn to turn, so the provider serves most of each request
-from cache. When history would crowd out the budget, the oldest turns are dropped in large chunks
-(`metadata["history_messages_dropped"]`), so the cache breaks only occasionally. Pass
-`trim_history=False` to manage history yourself. An overrun then sets
+from cache. History may hold `history_share` (default 0.75) of the budget left after the core.
+Past that, the oldest turns are dropped in chunks of half that share
+(`metadata["history_messages_dropped"]`). The cut depends only on the budget and the core, never
+on this turn's memories or question, so it stays put as the chat grows and the cache breaks only
+when another chunk goes. Dropped turns are not lost: the most recently dropped chunk returns in
+the dynamic tail as low-priority recall (`recall_evicted_history`), trimmed before any memory and
+kept out of `ref_map`. Pass `trim_history=False` to manage history yourself. An overrun then sets
 `metadata["budget_exceeded"] = True` instead of dropping turns.
 
 `memory_placement="system"` puts core, memories, the last turn and the user message into a single
@@ -320,6 +324,8 @@ calls.
 | `memory_placement` | `"end"` (end placement only) |
 | `stable_prefix_messages` | Number of leading messages that form the stable prefix |
 | `history_messages_dropped` | Oldest history messages dropped to fit the budget |
+| `history_messages_recalled` | Dropped messages that came back in the tail as recall |
+| `message_framing_tokens` | Per-message framing reserved in the budget (`token_count` is content only) |
 | `prompt_cache_used` | `True` when the model supports caching and the prefix is at least 1,024 tokens |
 | `cacheable_prefix_tokens` / `dynamic_tail_tokens` | Sizes of the two parts (set with `prompt_cache_used`) |
 | `budget_exceeded` | Reserved content (rules, history, current turn) alone exceeded `max_tokens` |
@@ -599,6 +605,9 @@ To write the compressor against a class instead of a bare function, implement th
 | `include_interrupt_instruction` | `True` | Append the interrupt-protocol instruction to the system message |
 | `memory_placement` | `"end"` | `"end"` (cache-friendly) or `"system"` (single system message) |
 | `trim_history` | `True` | With end placement, drop the oldest history in chunks when over budget |
+| `history_share` | `0.75` | Share of the budget after the core that history may hold in the cached prefix |
+| `recall_evicted_history` | `True` | Bring the most recently dropped history chunk back as low-priority recall |
+| `message_overhead_tokens` | `3` | Tokens billed per message on top of content (OpenAI chat framing), reserved in the budget |
 | `metrics_callback` | `None` | Receives a `CompileMetrics` after each compile (token counts, never prompt text) |
 | `preflight_analyst_model` | `None` | Model hint for your pre-flight compressor |
 
@@ -743,6 +752,29 @@ deterministic; your savings depend on prompt sizes and pricing.
 
 ```bash
 python -m benchmarks.cache_savings
+```
+
+**Peer comparison** ([`benchmarks/peer_comparison.py`](benchmarks/peer_comparison.py)): a
+24-turn chat under a hard budget, 5 seeds. Each turn asks for one fact that sits either in a
+retrieved memory or in a user message 10 turns back. Tokens are counted with OpenAI chat framing.
+Recall means the answer was in the prompt, an upper bound on accuracy. The `--live` mode measures
+real accuracy and `cached_tokens` against OpenAI but has not been run yet. `priompt` reimplements
+Priompt's priority-cutoff search rather than importing the package.
+
+| 6,000-token budget, 8 memories per turn | Cached | Over budget | Recall (memory / history) | Cost at 0.5× / 0.1× cache reads |
+| --- | ---: | ---: | ---: | ---: |
+| Naive concatenation | 27% | 0 | 100% / 100% | 100 / 100 |
+| Priompt-style, either priority scheme | 27% | 0 | 100% / 100% | 100 / 100 |
+| **Membrane, defaults** | **58%** | 0 | 100% / 100% | **82 / 63** |
+| Membrane, `memory_placement="system"` | 56% | 0 | 100% / 0% | 41 / 32 |
+
+With a 12,000-token budget Membrane caches 81% and costs 68 / 35. Under memory pressure
+(4,000 tokens, 40 memories) it still costs less (88 / 75), but it keeps fewer memories: 76%
+memory recall against 95% for naive, which makes room by discarding all history. Lower
+`history_share` for memory-heavy apps.
+
+```bash
+python -m benchmarks.peer_comparison [--budget N] [--memories N] [--live]
 ```
 
 Also in `benchmarks/`: `token_savings_bench.py` (savings from compression and trimming) and
