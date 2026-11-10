@@ -139,3 +139,30 @@ def test_recall_can_be_turned_off():
 def test_history_share_is_validated():
     with pytest.raises(ValueError):
         ContextCompiler(max_tokens=100, history_share=1.5)
+
+
+def test_a_recalled_passage_that_does_not_fit_is_thinned_to_the_sentence_that_matches():
+    history = []
+    for i in range(40):
+        fact = f"The gate code for site {i} is G{7000 + i}. "
+        history.append({"role": "user", "content": "filler words here " * 20 + fact + "more " * 20})
+        history.append({"role": "assistant", "content": f"Stored {i}. " + "reply " * 60})
+    def run(**kw):
+        cc = ContextCompiler(
+            max_tokens=2600, model_id=MODEL, core_content="Be brief.", eviction_index=False, **kw
+        )
+        return cc.compile(
+            memories=_mems(30, 30),
+            user_message="What is the gate code for site 3?",
+            conversation_messages=history,
+        )
+
+    r = run()
+    tail = r.messages[-1]["content"]
+    assert "[Earlier user] The gate code for site 3 is G7003. …" in tail
+    assert tail.startswith("(Lines ending in … are excerpts.)")
+    assert tail.index("--- Earlier conversation ---") < tail.index("--- Memories ---")
+    assert r.metadata["history_messages_recalled"] > 0
+    alone = run(recall_evicted_history=False)
+    # Passages only take what the memories leave; the one-line excerpt note is the only cost.
+    assert len(r.ref_map) >= len(alone.ref_map) - 1

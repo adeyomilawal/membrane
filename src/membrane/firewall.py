@@ -146,7 +146,9 @@ class PreFlightContextFirewall:
         packing: a segment's thin form is a short excerpt that keeps its ``[Mem:N]`` ref, or
         ``None`` when it has none. Thin forms of every segment are packed first, in priority
         order; then segments are upgraded to their full text in the same order while room
-        lasts. Nothing is dropped until everything else has been thinned. Pinned tiers get
+        lasts. Nothing is dropped until everything else has been thinned. A segment that is
+        its own thin form is placed whole in the first pass; one with ``None`` waits for the
+        second. Pinned tiers get
         their full text before any thin form is placed.
 
         ``stats`` includes ``segments_offered``, ``segments_kept``, ``tokens_trimmed`` (middle only)
@@ -272,7 +274,9 @@ class PreFlightContextFirewall:
                 kept.pop()
                 kept_idx.pop()
         thinned = {
-            str(thin[i]): sorted_segments[i][0] for i in kept_idx if i not in full
+            str(thin[i]): sorted_segments[i][0]
+            for i in kept_idx
+            if i not in full and thin[i] != sorted_segments[i][0]
         }
 
         kept_refs: dict[int, str] = {}

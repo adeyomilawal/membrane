@@ -39,9 +39,11 @@ from membrane.firewall import (
 from membrane.keyframes import (
     DEFAULT_KEYFRAME_TOKENS,
     THIN_MARK,
-    cached_terms,
-    document_frequency,
+    add_sentences,
     keyframe,
+    keyframes,
+    matching_sentence,
+    sentence_frequency,
 )
 from membrane.keyframes import terms as _terms
 from membrane.layout import ContextLayoutEngine
@@ -219,7 +221,12 @@ DEFAULT_MESSAGE_OVERHEAD_TOKENS = 3
 DEFAULT_HISTORY_SHARE = 0.75
 _EARLIER_HEADER = "--- Earlier conversation ---"
 _MEMORIES_HEADER = "--- Memories ---"
-_EXCERPT_NOTE = "(Lines ending in … are excerpts of longer memories.)"
+_INDEX_HEADER = "--- Earlier conversation: one line per dropped message ---"
+DEFAULT_INDEX_SHARE = 0.125
+_INDEX_CACHE_SIZE = 64
+_EXCERPT_NOTE = "(Lines ending in … are excerpts.)"
+# One keyframe per this many keyframe caps of message: a long paste keeps several lines.
+_INDEX_COMPRESSION = 10
 
 MEMORY_PLACEMENT_SYSTEM = "system"
 MEMORY_PLACEMENT_END = "end"
@@ -448,6 +455,7 @@ def _trim_history_chunked(
     limit: int,
     count_fn: Callable[[str], int],
     step: int | None = None,
+    sizes: list[int] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Drop the oldest messages so the rest fits ``limit``; return (kept, dropped count).
 
@@ -458,7 +466,8 @@ def _trim_history_chunked(
     so tool results are never separated from their call. Pass ``step`` to keep the grid
     fixed while ``limit`` varies.
     """
-    sizes = [count_fn(_message_text(m)) for m in history]
+    if sizes is None:
+        sizes = [count_fn(_message_text(m)) for m in history]
     total = sum(sizes)
     if total <= limit or not history:
         return history, 0
@@ -475,10 +484,79 @@ def _trim_history_chunked(
     return history[start:], start
 
 
+def _cut_starts(
+    history: list[dict[str, Any]], sizes: list[int], step: int, dropped: int
+) -> tuple[int, ...]:
+    """Where each cut on the grid landed on the way to the current one, ending at ``dropped``.
+
+    The same walk as :func:`_trim_history_chunked`, one grid step at a time, so the answer
+    depends only on the dropped messages and never on what came after them.
+    """
+    starts: list[int] = []
+    walked, seen, boundary = 0, 0, step
+    while True:
+        while walked < len(history) and seen < boundary:
+            seen += sizes[walked]
+            walked += 1
+        start = walked
+        while start < len(history) and history[start].get("role") != "user":
+            start += 1
+        if start >= dropped:
+            break
+        if not starts or start > starts[-1]:
+            starts.append(start)
+        boundary += step
+    return (*starts, dropped)
+
+
+def _eviction_index(
+    evicted: Sequence[tuple[str, str | None, int]],
+    starts: tuple[int, ...],
+    count_fn: Callable[[str], int],
+    cap: int,
+    budget: int,
+) -> tuple[str, ...]:
+    """One line per dropped message: its role and its keyframe, oldest first.
+
+    ``evicted`` is (role, text, tokens) for every dropped message; ``starts`` are the cuts
+    that dropped them. A message's keyframe is scored over the conversation up to the cut
+    that dropped it, so its line never changes afterwards and the index only grows at a
+    cut. A long message keeps one keyframe for every ten caps of its length, so a pasted
+    document is not reduced to a single sentence. Over ``budget`` (header included), the
+    oldest lines go.
+    """
+    df: dict[str, int] = {}
+    n, previous = 0, 0
+    lines: list[str] = []
+    for start in starts:
+        batch = [
+            (_RECALL_ROLES[role], text, size)
+            for role, text, size in evicted[previous:start]
+            if role in _RECALL_ROLES and text and text.strip()
+        ]
+        for _, text, _ in batch:
+            n += add_sentences(df, text)
+        for label, text, size in batch:
+            limit = 1 + size // (_INDEX_COMPRESSION * max(1, cap))
+            frames = keyframes(text, df, n, count_fn, cap, limit)
+            if frames:
+                # An old citation must not claim a ref in this turn's ref_map.
+                line = f"{label}: " + f"{THIN_MARK} ".join(frames)
+                lines.append(line.replace("[Mem:", "[mem:"))
+        previous = start
+    room = budget - count_fn(_INDEX_HEADER) - 1
+    keep = len(lines)
+    while keep > 0 and room >= count_fn(lines[keep - 1]) + 1:
+        room -= count_fn(lines[keep - 1]) + 1
+        keep -= 1
+    return tuple(lines[keep:])
+
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
 _PASSAGE_WORDS = 60
 _RECALL_SCAN = 256  # ranked passages token-counted per compile, at most
 _LEADING_REF = re.compile(r"^\s*\[Mem:\d+[^\]]*\]:?\s*")
+_EARLIER_LABEL = re.compile(r"^\[Earlier [^\]]+\]\s*")
 _RECALL_ROLES = {"user": "user", "assistant": "assistant", "tool": "tool result"}
 
 
@@ -568,35 +646,44 @@ def _fused_keep_order(segments: Sequence[tuple[str, int]], query: str) -> list[i
 
 def _thin_forms(
     segments: Sequence[tuple[str, int]],
-    skip: set[str],
+    recalled: set[str],
     history: Sequence[dict[str, Any]],
+    query: str,
     count_fn: Callable[[str], int],
     cap: int,
 ) -> list[str | None]:
     """Thin form of each segment: its ``[Mem:N]`` ref, its keyframe and an ellipsis.
 
-    Density is measured over the segments on offer and the conversation so far. ``None``
-    where a segment has no sentence under the cap, where thinning would save nothing, or
-    where the segment is in ``skip``.
+    A memory's keyframe is its densest sentence, measured over the memories on offer and
+    the conversation so far. A recalled passage (in ``recalled``) was picked for the words
+    it shares with the question, so its thin form is the sentence that shares them.
+    A memory with no sentence under the cap, or one that thinning would not shorten, is its
+    own thin form; a recalled passage with no matching sentence has ``None``.
     """
     bodies: list[tuple[str, str]] = []
     for text, _ in segments:
-        lead = _LEADING_REF.match(text)
+        lead = (_EARLIER_LABEL if text in recalled else _LEADING_REF).match(text)
         prefix = lead.group(0) if lead else ""
         bodies.append((prefix, text[len(prefix) :]))
-    corpus = [cached_terms(body) for _, body in bodies]
-    corpus += [
-        cached_terms(m["content"]) for m in history if isinstance(m.get("content"), str)
-    ]
-    df, n = document_frequency(corpus)
+    # Recalled passages are history, which is counted below.
+    corpus = [b for (text, _), (_, b) in zip(segments, bodies, strict=True) if text not in recalled]
+    corpus += [m["content"] for m in history if isinstance(m.get("content"), str)]
+    df, n = sentence_frequency(corpus)
+    wanted = _terms(query)
     out: list[str | None] = []
     for (text, _), (prefix, body) in zip(segments, bodies, strict=True):
-        frame = None if text in skip else keyframe(body, df, n, count_fn, cap)
+        if text in recalled:
+            frame = matching_sentence(body, wanted, count_fn, cap)
+        else:
+            frame = keyframe(body, df, n, count_fn, cap)
         if frame is None:
-            out.append(None)
+            # A memory that cannot be thinned is its own thin form: it is placed with the
+            # keyframes, so no excerpt of anything ranked below it can push it out. A
+            # recalled passage with nothing to show waits until the memories are done.
+            out.append(None if text in recalled else text)
             continue
         thin = (prefix.strip() + " " if prefix.strip() else "") + frame + THIN_MARK
-        out.append(thin if count_fn(thin) < count_fn(text) else None)
+        out.append(thin if count_fn(thin) < count_fn(text) else text)
     return out
 
 
@@ -781,8 +868,9 @@ class ContextCompiler:
     into passages of about 60 words, tool results included, and ranked by the rare words
     they share with the current user message, then by recency. The best passages, up to one
     chunk (half the history limit), join the sacrifice zone as low-priority episodic
-    segments in whatever room the memories leave. They are trimmed before any memory and
-    never enter ``ref_map``;
+    segments in whatever room the memories leave. No memory is dropped to make room for
+    one; a passage that does not fit whole is cut to the sentence that matches the question
+    (see ``thin_before_drop``). They never enter ``ref_map``;
     ``metadata["history_messages_recalled"]`` reports how many survived.
 
     With ``rank_fusion`` (default, end placement) the memories that survive trimming are
@@ -791,13 +879,28 @@ class ContextCompiler:
     passed, so nothing changes when everything fits. It is skipped when a reranker supplies
     weights.
 
+    With ``eviction_index`` (default, end placement with ``trim_history``) every dropped
+    message leaves one line behind: its keyframe (see below), in a block appended to the
+    system message after the core. A line is written when the cut that drops its message
+    happens and never changes afterwards, so the block only changes at a cut, where the
+    cached prefix after the core is rewritten anyway: it adds no cache breaks. The block
+    has ``index_share`` (default one eighth) of the budget the core leaves, taken out of
+    the history share; over that, its oldest lines go, again only at a cut. Tool results
+    get a line, tool-call stubs do not. ``metadata["history_index_lines"]`` and
+    ``metadata["history_index_tokens"]`` report it, and ``metadata["core_chars"]`` is
+    where the core ends inside the system message. Passage recall above still returns
+    matching passages in full.
+
     With ``thin_before_drop`` (default, end placement) no memory is dropped while another
     still has its full text. Every memory has a keyframe: its densest sentence under
-    ``keyframe_tokens`` (mean rarity of its words over the memories on offer and the
-    conversation). Under pressure the keyframes of all memories are placed first, then
+    ``keyframe_tokens`` (mean rarity of its words over the sentences of the memories on offer
+    and of the conversation). Under pressure the keyframes of all memories are placed first, then
     memories get their full text back in priority order while room lasts. A thinned memory
     keeps its ``[Mem:N]`` ref and ends in ``…``; ``metadata["segments_thinned"]`` counts
     them. A memory with no sentence under the cap is kept whole or dropped, as before.
+    Recalled passages take part too: their thin form is the sentence that shares the most
+    with the question, placed after every memory's keyframe and before memories get their
+    full text back.
 
     ``message_overhead_tokens`` is what the provider bills per chat message on top of its
     content (3 for OpenAI chat models), plus the same again once for reply priming. The
@@ -820,10 +923,17 @@ class ContextCompiler:
     message_overhead_tokens: int = DEFAULT_MESSAGE_OVERHEAD_TOKENS
     thin_before_drop: bool = True
     keyframe_tokens: int = DEFAULT_KEYFRAME_TOKENS
+    eviction_index: bool = True
+    index_share: float = DEFAULT_INDEX_SHARE
+    _index_cache: dict[Any, tuple[str, ...]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.history_share <= 1.0:
             raise ValueError(f"history_share must be within [0, 1], got {self.history_share!r}")
+        if not 0.0 <= self.index_share <= 1.0:
+            raise ValueError(f"index_share must be within [0, 1], got {self.index_share!r}")
         if self.memory_placement not in MEMORY_PLACEMENTS:
             raise ValueError(
                 f"memory_placement must be one of {MEMORY_PLACEMENTS}, "
@@ -847,6 +957,7 @@ class ContextCompiler:
         tier_shares: dict[int, float] | None = None,
         pinned_tiers: set[int] | None = None,
         thin: bool = True,
+        count_key: Any = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[int, str], int, dict[str, Any]]:
         """Build end block, trim the middle under ``max_tok``, and format provider messages.
 
@@ -896,23 +1007,37 @@ class ContextCompiler:
             user_message=user_message,
         )
         history_dropped = 0
-        # System message (when there is one), the final user message, and reply priming.
-        fixed_framing = overhead * ((1 if core_text.strip() else 0) + 2)
+        indexing = bool(self.eviction_index and self.trim_history and history)
+        # System message (when there is one, or the index may need one), the final user
+        # message, and reply priming.
+        fixed_framing = overhead * ((1 if core_text.strip() or indexing else 0) + 2)
         evicted: list[dict[str, Any]] = []
         full_history = history
+        index_lines: tuple[str, ...] = ()
         if self.trim_history and history:
             # Stable inputs only (budget, core, framing), so the grid never moves between turns.
             base = max(0, max_tok - fixed_framing - count_fn(core_text))
-            history_limit = int(base * self.history_share)
+            index_budget = int(base * self.index_share) if indexing else 0
+            # The index is history in another form, so its room comes out of history's share.
+            history_limit = max(0, int(base * self.history_share) - index_budget)
             # Extra grid steps only when this turn's own end block would not fit.
-            limit = min(history_limit, base - count_fn(end_text + directives_block))
+            limit = min(
+                history_limit, base - index_budget - count_fn(end_text + directives_block)
+            )
+            step = max(1, history_limit // 2)
+            sizes = [count_fn(_message_text(m)) + overhead for m in history]
             history, history_dropped = _trim_history_chunked(
-                history,
-                limit,
-                lambda text: count_fn(text) + overhead,
-                step=max(1, history_limit // 2),
+                history, limit, count_fn, step=step, sizes=sizes
             )
             evicted = full_history[:history_dropped]
+            if indexing and evicted:
+                index_lines = self._index_lines(
+                    full_history, sizes, step, history_dropped, count_fn, index_budget, count_key
+                )
+        system_text = core_text
+        if index_lines:
+            block = "\n".join((_INDEX_HEADER, *index_lines))
+            system_text = core_text + "\n\n" + block if core_text.strip() else block
         # Under pressure, which memories survive is decided by the retriever's rank fused
         # with relevance to this turn; the survivors are still emitted in the given order.
         given_order: dict[str, int] = {}
@@ -951,32 +1076,31 @@ class ContextCompiler:
         thin_forms: list[str | None] | None = None
         if thin and self.thin_before_drop and middle_segments:
             # Keyframes are only worked out when the memories do not all fit.
-            room = max_tok - framing - headers - count_fn(core_text) - history_tokens
+            room = max_tok - framing - headers - count_fn(system_text) - history_tokens
             room -= count_fn(end_with_directives) + len(history) + len(middle_segments) + 8
             if sum(count_fn(text) for text, _ in middle_segments) > room:
                 thin_forms = _thin_forms(
                     middle_segments,
                     recalled_texts,
                     full_history,
+                    user_message,
                     count_fn,
                     self.keyframe_tokens,
                 )
-                if any(thin_forms):
+                pairs = zip(thin_forms, middle_segments, strict=True)
+                if any(form and form != text for form, (text, _) in pairs):
                     headers += count_fn(_EXCERPT_NOTE + "\n")
                 else:
                     thin_forms = None
+        # The prefix (system message and history) is counted message by message, exactly as
+        # it is sent; the firewall only packs the tail into what the prefix leaves.
         firewall = PreFlightContextFirewall(
-            max_tokens=max_tok - framing - headers, count_fn=count_fn
-        )
-        history_text = "\n\n".join(_message_text(m) for m in history)
-        # History is part of the cached prefix: reserved here, only trimmed above in chunks.
-        # Directives ride in the final user message, so they are reserved too.
-        reserved_end = (
-            history_text + "\n\n" + end_with_directives if history_text else end_with_directives
+            max_tokens=max_tok - framing - headers - count_fn(system_text) - history_tokens,
+            count_fn=count_fn,
         )
         _, ref_map_kept, _, fw_stats = firewall.run(
-            core_text=core_text,
-            end_text=reserved_end,
+            core_text="",
+            end_text=end_with_directives,
             middle_segments=middle_segments,
             ref_map=ref_map,
             segment_weights=segment_weights,
@@ -986,23 +1110,25 @@ class ContextCompiler:
         )
         kept = list(fw_stats.pop("kept_segments", []))
         thinned: dict[str, str] = fw_stats.pop("thinned_segments", {})
+        whole = {seg: thinned.get(seg, seg) for seg in kept}
         earlier = sorted(
-            (seg for seg in kept if seg in recalled_texts), key=recall_order.__getitem__
+            (seg for seg in kept if whole[seg] in recalled_texts),
+            key=lambda seg: recall_order[whole[seg]],
         )  # chronological
-        kept = [seg for seg in kept if seg not in recalled_texts]
+        kept = [seg for seg in kept if whole[seg] not in recalled_texts]
         if given_order:
-            kept.sort(key=lambda seg: given_order.get(thinned.get(seg, seg), len(given_order)))
-        if thinned:
-            kept = [_EXCERPT_NOTE, *kept]
+            kept.sort(key=lambda seg: given_order.get(whole[seg], len(given_order)))
         if earlier:
             kept = [_EARLIER_HEADER, *earlier, _MEMORIES_HEADER, *kept]
+        if thinned:
+            kept = [_EXCERPT_NOTE, *kept]
         tail = ("\n".join(kept) + "\n\n" + end_text) if kept else end_text
         tail += directives_block
         # Some providers reject an empty system message.
-        system = [{"role": "system", "content": core_text}] if core_text.strip() else []
+        system = [{"role": "system", "content": system_text}] if system_text.strip() else []
         messages = [*system, *history]
         messages.append({"role": "user", "content": tail})
-        prefix_tokens = count_fn(core_text) + sum(count_fn(_message_text(m)) for m in history)
+        prefix_tokens = count_fn(system_text) + history_tokens
         tail_tokens = count_fn(tail)
         cache_meta: dict[str, Any] = {
             "memory_placement": MEMORY_PLACEMENT_END,
@@ -1011,6 +1137,10 @@ class ContextCompiler:
         }
         if recalled_texts:
             cache_meta["history_messages_recalled"] = len(earlier)
+        if index_lines:
+            cache_meta["history_index_lines"] = len(index_lines)
+            cache_meta["history_index_tokens"] = count_fn(system_text) - count_fn(core_text)
+            cache_meta["core_chars"] = len(core_text)
         if framing:
             cache_meta["message_framing_tokens"] = framing
         if prefix_tokens + tail_tokens + framing > max_tok:
@@ -1028,6 +1158,31 @@ class ContextCompiler:
                 dynamic_tail_tokens=tail_tokens,
             )
         return messages, cache_meta, ref_map_kept, prefix_tokens + tail_tokens, fw_stats
+
+    def _index_lines(
+        self,
+        full_history: list[dict[str, Any]],
+        sizes: list[int],
+        step: int,
+        dropped: int,
+        count_fn: Callable[[str], int],
+        budget: int,
+        count_key: Any,
+    ) -> tuple[str, ...]:
+        """Eviction index for the current cut; computed once per cut and then reused."""
+        evicted = tuple(
+            (str(m.get("role")), c if isinstance(c := m.get("content"), str) else None, size)
+            for m, size in zip(full_history[:dropped], sizes, strict=False)
+        )
+        starts = _cut_starts(full_history, sizes, step, dropped)
+        key = (evicted, starts, self.keyframe_tokens, budget, count_key)
+        lines = self._index_cache.get(key)
+        if lines is None:
+            lines = _eviction_index(evicted, starts, count_fn, self.keyframe_tokens, budget)
+            while len(self._index_cache) >= _INDEX_CACHE_SIZE:
+                self._index_cache.pop(next(iter(self._index_cache)))
+            self._index_cache[key] = lines
+        return lines
 
     def _policy_max_tokens(self, policy_kw: dict[str, Any]) -> int:
         """Budget after policies: ``set_max_tokens`` / ``override.max_tokens`` replace it,
@@ -1369,6 +1524,7 @@ class ContextCompiler:
                     tier_shares=tier_shares,
                     pinned_tiers=pinned_tiers,
                     thin=compressed_middle is None,
+                    count_key=id(prof.tokenizer_registry) if prof.tokenizer_registry else None,
                 )
             )
         if compressed_middle is not None and fw_stats.get("segments_kept"):
@@ -1836,6 +1992,7 @@ class ContextCompiler:
                     tier_shares=tier_shares,
                     pinned_tiers=pinned_tiers,
                     thin=compressed_middle is None,
+                    count_key=id(prof.tokenizer_registry) if prof.tokenizer_registry else None,
                 )
             )
         if compressed_middle is not None and fw_stats.get("segments_kept"):

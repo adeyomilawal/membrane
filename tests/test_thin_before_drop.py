@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from membrane import ContextCompiler, MemoryItem
 from membrane.firewall import TIER_EPISODIC, TIER_SEMANTIC, PreFlightContextFirewall, count_tokens
-from membrane.keyframes import document_frequency, keyframe, terms
+from membrane.keyframes import keyframe, sentence_frequency
 
 MODEL = "openai/gpt-4o"
 CITIES = ["Lisbon", "Porto", "Faro", "Braga", "Coimbra", "Evora", "Sintra", "Tavira"] * 5
@@ -83,7 +83,7 @@ def test_a_memory_with_no_sentence_under_the_cap_is_kept_whole_or_dropped():
 
 def test_keyframe_scoring_rules():
     texts = ["The door code is 4417. Thanks a lot.", "Thanks a lot. See you.", "Thanks. Bye."]
-    df, n = document_frequency(terms(t) for t in texts)
+    df, n = sentence_frequency(texts)
     assert keyframe(texts[0], df, n, count_tokens) == "The door code is 4417."
     # A sentence over the cap cannot win, however rare its words.
     long = "zebra quokka " * 30 + "end. Short one."
@@ -124,3 +124,19 @@ def test_segments_without_a_thin_form_are_all_or_nothing():
     fw = PreFlightContextFirewall(max_tokens=50)
     _, _, _, stats = fw.run("core", "end", segs, {1: "a"}, thin_segments=["[Mem:1] w …", None])
     assert stats["kept_segments"] == [segs[0][0]]
+
+
+def test_a_phrase_repeated_on_every_line_of_one_long_text_is_not_rare():
+    doc = " ".join(f"Clause {i} of the agreement stays in force." for i in range(100))
+    doc += " The vault code is V4417."
+    df, n = sentence_frequency([doc, "Thanks.", "The weather is fine."])
+    assert keyframe(doc, df, n, count_tokens) == "The vault code is V4417."
+
+
+def test_a_segment_that_is_its_own_thin_form_cannot_be_pushed_out_by_an_excerpt_below_it():
+    whole = "[Mem:1] " + "word " * 30
+    segs = [(whole, TIER_SEMANTIC), ("passage " * 30, TIER_EPISODIC)]
+    fw = PreFlightContextFirewall(max_tokens=45)
+    _, refs, _, stats = fw.run("core", "end", segs, {1: "a"}, thin_segments=[whole, "p …"])
+    assert stats["kept_segments"] == [whole, "p …"]
+    assert stats["segments_thinned"] == 1 and refs == {1: "a"}
