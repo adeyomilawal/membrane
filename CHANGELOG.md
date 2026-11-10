@@ -9,6 +9,7 @@ Default output changes for end placement (history cut, tail layout), so release 
 - The budget now covers provider message framing: `message_overhead_tokens` (default 3, OpenAI chat framing) per message plus reply priming, so the billed request stays under `max_tokens`. `token_count` stays content-only; `metadata["message_framing_tokens"]` reports the reserve.
 - End placement: the history cut depends only on the budget, the core and framing (`history_share`, default 0.75), on a fixed chunk grid. It no longer shifts with each turn's memories or question, so the cached prefix breaks less often.
 - End placement: the most recently dropped history chunk returns in the tail as low-priority recall (`recall_evicted_history=True`, `metadata["history_messages_recalled"]`). It is trimmed before any memory, skips tool messages, and never enters `ref_map`.
+- New `benchmarks/hard_suite.py`: seven stress scenarios against LangChain `trim_messages`, LlamaIndex `ChatMemoryBuffer` and `Memory`, a Priompt-style cutoff and a naive loop. Results, including the two scenarios Membrane loses, are in the README.
 - New `benchmarks/peer_comparison.py`: naive concatenation, a Priompt-style priority cutoff, and Membrane under a hard budget, with an opt-in `--live` mode against OpenAI.
 
 ## [0.2.1] — 2026-11-10

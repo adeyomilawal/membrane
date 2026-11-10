@@ -780,6 +780,40 @@ memory recall against 95% for naive, which makes room by discarding all history.
 python -m benchmarks.peer_comparison [--budget N] [--memories N] [--live]
 ```
 
+**Hard suite** ([`benchmarks/hard_suite.py`](benchmarks/hard_suite.py)): seven stress scenarios,
+5 seeds each, against LangChain `trim_messages`, LlamaIndex `ChatMemoryBuffer` and `Memory`, a
+Priompt-style cutoff and a naive loop. Offline; recall is an upper bound on accuracy. Mean over
+all scenarios (cost relative to naive = 100):
+
+| | Cost at 0.5× / 0.1× cache reads | Recall | Turns over budget | Invalid tool requests |
+| --- | ---: | ---: | ---: | ---: |
+| Naive loop | 100 / 100 | 93% | 0 | 10 |
+| LangChain `trim_messages` | 98 / 98 | 93% | 0 | 0 |
+| LlamaIndex `ChatMemoryBuffer` | 99 / 98 | 93% | 277 | 0 |
+| LlamaIndex `Memory` | 83 / 81 | 86% | 137 | 0 |
+| Priompt-style cutoff | 99 / 98 | 93% | 0 | 0 |
+| **Membrane, defaults** | **78 / 59** | 90% | 0 | 0 |
+| Membrane, `recall_evicted_history=False` | 67 / 47 | 86% | 0 | 0 |
+
+Membrane is cheapest in every scenario. Recall matches the trimming libraries in three (80-turn
+chat, two-fact questions, 24,000-token budget) and is within a point or two under a 3,000-token
+budget. It is behind in three:
+
+- **Tool results.** Facts inside old tool results: 58% against 63%, because dropped tool messages
+  are not brought back as recall.
+
+- **Long pastes.** A 2,500-token pasted message is dropped from history early and is too big to
+  come back as recall: 8% of paste questions answerable against 60% for the trimming libraries.
+- **Memory floods.** With up to 40 memories per turn Membrane keeps history and drops memories
+  (77% memory recall, 100% history recall); the others do the reverse (100% and 50%).
+
+The peers put retrieved memories in the system message, as their RAG chat patterns do. Moving
+them next to the question by hand gives the same caching in any of them.
+
+```bash
+uv run --extra langchain --extra llamaindex python -m benchmarks.hard_suite
+```
+
 Also in `benchmarks/`: `token_savings_bench.py` (savings from compression and trimming) and
 `trimming_bench.py` (trimming keeps high-priority content and the U-shaped layout).
 
