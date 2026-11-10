@@ -2581,14 +2581,90 @@ def compile_anonymous(
     agent_persona_prompt: str | None = None,
     use_prompt_caching_split: bool = True,
     metrics_callback: MetricsCallback | None = None,
+    memory_placement: str = MEMORY_PLACEMENT_SYSTEM,
+    trim_history: bool = True,
+    history_share: float = DEFAULT_HISTORY_SHARE,
+    recall_evicted_history: bool = True,
+    eviction_index: bool = True,
+    index_share: float = DEFAULT_INDEX_SHARE,
+    keyframe_tokens: int = DEFAULT_KEYFRAME_TOKENS,
+    message_overhead_tokens: int = DEFAULT_MESSAGE_OVERHEAD_TOKENS,
+    token_scale: float | None = None,
 ) -> CompileResult:
-    """No long-term memory: core + conversation + user; firewall if over cap."""
+    """No long-term memory: core + conversation + user message.
+
+    ``memory_placement="system"`` (default) puts everything into one system message and
+    never trims history; an overrun sets ``metadata["budget_exceeded"]``. It honours
+    ``message_overhead_tokens`` (framing is reserved in the budget) and ``token_scale``
+    (the budget is divided by it; ``None`` takes the capability map's seed for the model).
+
+    ``memory_placement="end"`` gives the layout :class:`ContextCompiler` uses by default:
+    system message, history as chat messages, the question last. It honours every history
+    option of the compiler (``trim_history``, ``history_share``, ``recall_evicted_history``,
+    ``eviction_index``, ``index_share``, ``keyframe_tokens``) and reports the same metadata,
+    cache breakpoints included. Each call is independent, so for a long conversation a
+    ``ContextCompiler`` you keep is faster: it remembers what it has already counted.
+    """
+    if memory_placement not in MEMORY_PLACEMENTS:
+        raise ValueError(
+            f"memory_placement must be one of {MEMORY_PLACEMENTS}, got {memory_placement!r}"
+        )
     t0 = time.perf_counter()
+    if memory_placement == MEMORY_PLACEMENT_END:
+        compiler = ContextCompiler(
+            max_tokens=max_tokens,
+            model_id=model_id,
+            core_content=core_content,
+            include_interrupt_instruction=False,
+            memory_placement=MEMORY_PLACEMENT_END,
+            trim_history=trim_history,
+            history_share=history_share,
+            recall_evicted_history=recall_evicted_history,
+            eviction_index=eviction_index,
+            index_share=index_share,
+            keyframe_tokens=keyframe_tokens,
+            message_overhead_tokens=message_overhead_tokens,
+            token_scale=token_scale,
+        )
+        result = compiler.compile(
+            memories=[],
+            user_message=user_message,
+            conversation_messages=conversation_messages,
+            agent_persona_prompt=agent_persona_prompt,
+            use_prompt_caching_split=use_prompt_caching_split,
+        )
+        md = result.metadata
+        md["security_flag"] = SecurityFlag.ANONYMOUS_MODE.value
+        _emit_compile_metrics(
+            metrics_callback,
+            build_compile_metrics(
+                wall_time_ms=(time.perf_counter() - t0) * 1000.0,
+                token_count=int(md["token_count"]),
+                tokens_trimmed=int(md["tokens_trimmed"]),
+                tokens_budget=int(md["tokens_budget"]),
+                segments_offered=int(md["segments_offered"]),
+                segments_kept=int(md["segments_kept"]),
+                ref_map_size=0,
+                cache_hit=bool(md.get("prompt_cache_used")),
+                is_anonymous=True,
+                model_id=model_id,
+                user_id=None,
+                conversation_id=None,
+            ),
+        )
+        return result
+
     cap = max_tokens
     if model_id:
         mc = lookup_context_cap(model_id)
         if mc:
             cap = min(cap, mc)
+    scale = token_scale if token_scale is not None else get_token_scale(model_id)
+    if scale <= 0:
+        raise ValueError(f"token_scale must be positive, got {token_scale!r}")
+    # One message plus reply priming; the budget is in the provider's tokens.
+    framing = 2 * max(0, message_overhead_tokens)
+    counted_cap = max(1, int(cap / scale))
     layout = ContextLayoutEngine(core_content=core_content)
     if agent_persona_prompt:
         layout.core_content = layout.core_content + "\n\n" + agent_persona_prompt
@@ -2607,8 +2683,8 @@ def compile_anonymous(
         "segments_kept": 0,
         "tokens_trimmed": 0,
     }
-    if total > cap:
-        firewall = PreFlightContextFirewall(max_tokens=cap)
+    if total + framing > counted_cap:
+        firewall = PreFlightContextFirewall(max_tokens=counted_cap - framing)
         full, ref_map, total, fw_stats = firewall.run(
             core_text=core_text,
             end_text=end_text,
@@ -2639,12 +2715,15 @@ def compile_anonymous(
             "token_count": total,
             "tokens_trimmed": int(fw_stats.get("tokens_trimmed", 0)),
             "tokens_budget": cap,
+            "token_scale": scale,
+            **({"tokens_budget_counted": counted_cap} if counted_cap != cap else {}),
             "segments_offered": int(fw_stats.get("segments_offered", 0)),
             "segments_kept": int(fw_stats.get("segments_kept", 0)),
+            **({"message_framing_tokens": framing} if framing else {}),
             **cache_meta,
         },
     )
-    if total > cap:
+    if total + framing > counted_cap:
         # History is never trimmed here; report the overrun instead of hiding it.
         result.metadata["budget_exceeded"] = True
     _emit_compile_metrics(
