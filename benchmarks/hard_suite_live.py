@@ -100,7 +100,9 @@ def for_model(cls: type, model: str) -> type:
     if not issubclass(cls, hs.Membrane):
         return cls
     model_id = model if "/" in model else f"anthropic/{model}"
-    return type(cls.__name__, (cls,), {"model": model_id})
+    # Budgets stay in tiktoken tokens for every strategy, so the scale is fixed at 1.
+    options = {**cls.options, "token_scale": 1.0}
+    return type(cls.__name__, (cls,), {"model": model_id, "options": options})
 
 
 @dataclass

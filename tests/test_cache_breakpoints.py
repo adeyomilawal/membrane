@@ -27,6 +27,7 @@ def _history(turns: int, words: int = 40) -> list[dict]:
 def _compile(
     model: str = CLAUDE, max_tokens: int = 8000, turns: int = 12, words: int = 40, **kw
 ):
+    kw.setdefault("token_scale", 1.0)  # budgets in counted tokens, whatever the model
     cc = ContextCompiler(max_tokens=max_tokens, model_id=model, core_content=CORE, **kw)
     return cc.compile(
         memories=[MemoryItem(id="m", content="The user is in Lagos.")],

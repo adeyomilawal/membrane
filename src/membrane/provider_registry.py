@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 _capabilities_map: dict[str, list[str]] | None = None
 _context_caps_map: dict[str, int] | None = None
 _cache_pricing_map: dict[str, CachePricing] = {}
+_token_scale_map: dict[str, float] = {}
 
 CACHE_MODE_AUTOMATIC = "automatic"  # the provider caches shared prefixes by itself
 CACHE_MODE_MARKED = "marked"  # the request must mark where a cached prefix ends
@@ -86,7 +87,7 @@ def _load_bundled() -> dict | None:
 
 
 def _load_once() -> tuple[dict[str, list[str]], dict[str, int]]:
-    global _capabilities_map, _context_caps_map, _cache_pricing_map
+    global _capabilities_map, _context_caps_map, _cache_pricing_map, _token_scale_map
     if _capabilities_map is not None and _context_caps_map is not None:
         return _capabilities_map, _context_caps_map
 
@@ -100,7 +101,7 @@ def _load_once() -> tuple[dict[str, list[str]], dict[str, int]]:
         data = _load_bundled()
     if data is None:
         _capabilities_map, _context_caps_map = _default_maps()
-        _cache_pricing_map = {}
+        _cache_pricing_map, _token_scale_map = {}, {}
         return _capabilities_map, _context_caps_map
 
     # Build locally, then publish both maps at once so readers never see a half-built map.
@@ -128,6 +129,16 @@ def _load_once() -> tuple[dict[str, list[str]], dict[str, int]]:
         ctx_map["_default"] = 8192
 
     _cache_pricing_map = _parse_pricing(data.get("cache_pricing"))
+    scales: dict[str, float] = {}
+    for k, v in (data.get("token_scale") or {}).items() if isinstance(
+        data.get("token_scale"), dict
+    ) else ():
+        try:
+            if float(v) > 0:
+                scales[k] = float(v)
+        except (TypeError, ValueError):
+            logger.error("Invalid token_scale entry for %r", k)
+    _token_scale_map = scales
     _capabilities_map, _context_caps_map = cap_map, ctx_map
     return cap_map, ctx_map
 
@@ -222,6 +233,20 @@ def get_cache_pricing(model_id: str | None) -> CachePricing | None:
     if key is not None:
         return _cache_pricing_map[key]
     return _cache_pricing_map.get("_default", CachePricing())
+
+
+def get_token_scale(model_id: str | None) -> float:
+    """Starting guess for how many of the model's own tokens one counted token is.
+
+    Membrane counts with tiktoken for every model; a provider with another tokenizer bills
+    more or fewer tokens for the same text. This is the seed that
+    ``ContextCompiler.observe`` then corrects from real usage. 1.0 for unknown models.
+    """
+    _load_once()
+    key = _resolve_key(model_id, list(_token_scale_map), warn=False)
+    if key is not None:
+        return _token_scale_map[key]
+    return _token_scale_map.get("_default", 1.0)
 
 
 def has_streaming_interrupt(model_id: str | None) -> bool:

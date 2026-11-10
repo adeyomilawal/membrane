@@ -73,5 +73,21 @@
     "anthropic/claude-haiku-5-5": {"mode": "marked", "write": 1.25, "read": 0.1, "min_tokens": 512},
     "anthropic/claude-fable-5-1": {"mode": "marked", "write": 1.25, "read": 0.025, "min_tokens": 512},
     "_default": {"mode": "automatic", "write": 1.0, "read": 0.5, "min_tokens": 1024}
+  },
+  "token_scale": {
+    "anthropic/claude-3-5-sonnet": 1.2,
+    "anthropic/claude-3-7-sonnet": 1.2,
+    "anthropic/claude-sonnet-4.5": 1.2,
+    "anthropic/claude-3-opus": 1.2,
+    "anthropic/claude-opus": 1.2,
+    "anthropic/claude-sonnet": 1.2,
+    "anthropic/claude-haiku": 1.2,
+    "anthropic/claude-opus-4-7": 1.5,
+    "anthropic/claude-opus-4-8": 1.5,
+    "anthropic/claude-opus-5": 1.5,
+    "anthropic/claude-sonnet-5": 1.5,
+    "anthropic/claude-haiku-5": 1.5,
+    "anthropic/claude-fable": 1.5,
+    "_default": 1.0
   }
 }

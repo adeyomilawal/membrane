@@ -54,6 +54,7 @@ from membrane.metrics import CompileMetrics, MetricsCallback, build_compile_metr
 from membrane.provider_registry import (
     CachePricing,
     get_cache_pricing,
+    get_token_scale,
     has_prompt_caching,
     lookup_context_cap,
 )
@@ -243,6 +244,38 @@ INTERRUPT_INSTRUCTION = (
     "fetch it. Use request_memory_expansion(local_id) for [Mem:N] references when you need "
     "full prose; use search_cognitive_memory(query) for new searches."
 )
+
+
+_SCALE_GRID = 0.05  # the applied scale moves in steps of this size
+_SCALE_SLACK = 0.1  # and only comes down once it is this much too high
+_SCALE_SMOOTHING = 0.2
+_SCALE_BOUNDS = (0.25, 4.0)
+
+
+@dataclass
+class _TokenScale:
+    """What one model has billed against what Membrane counted, smoothed.
+
+    ``applied`` is the scale budgets are divided by. It follows ``mean + 2 * spread`` but on
+    a grid and with slack on the way down, because every change moves the budget and with
+    it the history cut, which breaks the cached prefix once.
+    """
+
+    mean: float
+    applied: float
+    spread: float = 0.0
+    samples: int = 0
+
+    def add(self, ratio: float) -> None:
+        ratio = min(max(ratio, _SCALE_BOUNDS[0]), _SCALE_BOUNDS[1])
+        self.samples += 1
+        # The seed counts as one sample, so the first few observations move it quickly.
+        weight = max(_SCALE_SMOOTHING, 1.0 / (self.samples + 1))
+        self.spread += weight * (abs(ratio - self.mean) - self.spread)
+        self.mean += weight * (ratio - self.mean)
+        target = min(self.mean + 2.0 * self.spread, _SCALE_BOUNDS[1])
+        if target > self.applied or target < self.applied - _SCALE_SLACK:
+            self.applied = round(math.ceil(target / _SCALE_GRID - 1e-9) * _SCALE_GRID, 4)
 
 
 class SecurityFlag(str, Enum):
@@ -952,6 +985,16 @@ class ContextCompiler:
     has marked it, later ones keep the marker, which then reads what is cached. Prices and
     minimum cacheable sizes come from the capability map (``cache_pricing``).
 
+    Budgets are calibrated to the provider's own token counts. Membrane counts with
+    tiktoken for every model, and other tokenizers count the same text differently (Claude
+    counts more). The budget is divided by a per-model ``token_scale``: it starts from the
+    capability map's seed and is corrected by :meth:`observe`, which you call after each
+    request with the prompt tokens the provider reported. ``metadata["token_scale"]`` and
+    ``metadata["token_scale_samples"]`` report it; ``metadata["tokens_budget_counted"]`` is
+    the budget in counted tokens when the scale is not 1. Pass ``token_scale=`` to fix the
+    scale yourself (1.0 turns calibration off). No tokenizer is downloaded and nothing is
+    sent anywhere.
+
     With ``thin_before_drop`` (default, end placement) no memory is dropped while another
     still has its full text. Every memory has a keyframe: its densest sentence under
     ``keyframe_tokens`` (mean rarity of its words over the sentences of the memories on offer
@@ -986,6 +1029,10 @@ class ContextCompiler:
     keyframe_tokens: int = DEFAULT_KEYFRAME_TOKENS
     eviction_index: bool = True
     index_share: float = DEFAULT_INDEX_SHARE
+    token_scale: float | None = None
+    _scales: dict[tuple[str | None, bool], _TokenScale] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
     _index_cache: dict[Any, tuple[str, ...]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -995,6 +1042,8 @@ class ContextCompiler:
             raise ValueError(f"history_share must be within [0, 1], got {self.history_share!r}")
         if not 0.0 <= self.index_share <= 1.0:
             raise ValueError(f"index_share must be within [0, 1], got {self.index_share!r}")
+        if self.token_scale is not None and self.token_scale <= 0:
+            raise ValueError(f"token_scale must be positive, got {self.token_scale!r}")
         if self.memory_placement not in MEMORY_PLACEMENTS:
             raise ValueError(
                 f"memory_placement must be one of {MEMORY_PLACEMENTS}, "
@@ -1019,6 +1068,7 @@ class ContextCompiler:
         pinned_tiers: set[int] | None = None,
         thin: bool = True,
         count_key: Any = None,
+        token_scale: float = 1.0,
     ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[int, str], int, dict[str, Any]]:
         """Build end block, trim the middle under ``max_tok``, and format provider messages.
 
@@ -1218,7 +1268,9 @@ class ContextCompiler:
             )
             cache_meta["budget_exceeded"] = True
         pricing = (get_cache_pricing(self.model_id) or CachePricing()) if caching else None
-        if pricing is not None and prefix_tokens >= pricing.min_tokens:
+        # The provider's minimum is in its own tokens.
+        minimum = pricing.min_tokens / token_scale if pricing is not None else 0.0
+        if pricing is not None and prefix_tokens >= minimum:
             cache_meta.update(
                 prompt_cache_used=True,
                 cacheable_prefix_tokens=prefix_tokens,
@@ -1229,7 +1281,7 @@ class ContextCompiler:
             # and after the history (stable until the next cut).
             points: list[dict[str, Any]] = []
             core_tokens = count_fn(core_text)
-            if core_text.strip() and core_tokens >= pricing.min_tokens:
+            if core_text.strip() and core_tokens >= minimum:
                 points.append(
                     {
                         "message_index": 0,
@@ -1238,7 +1290,7 @@ class ContextCompiler:
                         "reason": "core",
                     }
                 )
-            if history and prefix_tokens >= pricing.min_tokens:
+            if history and prefix_tokens >= minimum:
                 # Mark when this history is expected to be read before the next cut, or when
                 # an earlier request since the cut already wrote it: then the marker reads
                 # that entry and only writes the turn added since.
@@ -1256,6 +1308,38 @@ class ContextCompiler:
             cache_meta["cache_mode"] = pricing.mode
             cache_meta["cache_breakpoints"] = points
         return messages, cache_meta, ref_map_kept, prefix_tokens + tail_tokens, fw_stats
+
+    def _scale_state(self, exact_tokenizer: bool = False) -> _TokenScale:
+        """Calibration state for this model. With a tokenizer registry the counts are taken
+        to be the provider's own, so the seed is 1."""
+        key = (self.model_id, exact_tokenizer)
+        state = self._scales.get(key)
+        if state is None:
+            seed = 1.0 if exact_tokenizer else get_token_scale(self.model_id)
+            state = self._scales[key] = _TokenScale(mean=seed, applied=seed)
+        return state
+
+    def observe(self, result: CompileResult, actual_prompt_tokens: int) -> float:
+        """Report what the provider billed for a compiled prompt; returns the scale now in use.
+
+        ``actual_prompt_tokens`` is the provider's prompt-token count for the request built
+        from ``result``: everything on the input side, cached or not (for Anthropic,
+        ``input_tokens + cache_read_input_tokens + cache_creation_input_tokens``). The
+        ratio to Membrane's own count (content plus message framing) is smoothed per model,
+        a margin of twice its spread is added, and later compiles divide the budget by the
+        result. Tool definitions and anything else you add to the request count towards the
+        ratio, which is what keeps the whole request inside the budget.
+
+        The scale in use changes in steps of 0.05, rises at once and falls only when it is
+        0.1 too high, because each change moves the history cut once. Nothing is stored
+        outside this compiler and nothing is sent anywhere.
+        """
+        md = result.metadata
+        counted = int(md.get("token_count", 0)) + int(md.get("message_framing_tokens", 0))
+        state = self._scale_state(bool(md.get("token_scale_exact_tokenizer")))
+        if counted > 0 and actual_prompt_tokens > 0:
+            state.add(actual_prompt_tokens / counted)
+        return self.token_scale if self.token_scale is not None else state.applied
 
     def _index_lines(
         self,
@@ -1449,6 +1533,10 @@ class ContextCompiler:
         policy_disable = _policy_disabled_features(policy_kw)
         tier_shares, pinned_tiers = _policy_tier_settings(policy_kw)
         max_tok = self._policy_max_tokens(policy_kw)
+        scale_state = self._scale_state(prof.tokenizer_registry is not None)
+        token_scale = self.token_scale if self.token_scale is not None else scale_state.applied
+        # The budget is in the provider's tokens; counting is in ours.
+        counted_budget = max(1, int(max_tok / token_scale))
 
         mems: list[Any] = list(memories)
         dedup_res = None
@@ -1616,7 +1704,8 @@ class ContextCompiler:
                     conversation_messages=msgs,
                     last_assistant_turn=last_assistant_turn,
                     user_message=user_message,
-                    max_tok=max_tok,
+                    max_tok=counted_budget,
+                    token_scale=token_scale,
                     use_split=use_prompt_caching_split,
                     count_fn=_count_ctx,
                     tier_shares=tier_shares,
@@ -1662,6 +1751,14 @@ class ContextCompiler:
                 "retrieval_summary": retrieval_summary,
                 "tokens_trimmed": int(fw_stats.get("tokens_trimmed", 0)),
                 "tokens_budget": max_tok,
+                "token_scale": token_scale,
+                "token_scale_samples": scale_state.samples,
+                **({"tokens_budget_counted": counted_budget} if counted_budget != max_tok else {}),
+                **(
+                    {"token_scale_exact_tokenizer": True}
+                    if prof.tokenizer_registry is not None
+                    else {}
+                ),
                 "segments_offered": int(fw_stats.get("segments_offered", segments_offered_pre)),
                 "segments_kept": int(fw_stats.get("segments_kept", 0)),
                 "segments_thinned": int(fw_stats.get("segments_thinned", 0)),
@@ -1887,6 +1984,10 @@ class ContextCompiler:
         policy_disable = _policy_disabled_features(policy_kw)
         tier_shares, pinned_tiers = _policy_tier_settings(policy_kw)
         max_tok = self._policy_max_tokens(policy_kw)
+        scale_state = self._scale_state(prof.tokenizer_registry is not None)
+        token_scale = self.token_scale if self.token_scale is not None else scale_state.applied
+        # The budget is in the provider's tokens; counting is in ours.
+        counted_budget = max(1, int(max_tok / token_scale))
 
         mems: list[Any] = list(memories)
         dedup_res = None
@@ -2084,7 +2185,8 @@ class ContextCompiler:
                     conversation_messages=msgs,
                     last_assistant_turn=last_assistant_turn,
                     user_message=user_message,
-                    max_tok=max_tok,
+                    max_tok=counted_budget,
+                    token_scale=token_scale,
                     use_split=use_prompt_caching_split,
                     count_fn=_count_ctx,
                     tier_shares=tier_shares,
@@ -2130,6 +2232,14 @@ class ContextCompiler:
                 "retrieval_summary": retrieval_summary,
                 "tokens_trimmed": int(fw_stats.get("tokens_trimmed", 0)),
                 "tokens_budget": max_tok,
+                "token_scale": token_scale,
+                "token_scale_samples": scale_state.samples,
+                **({"tokens_budget_counted": counted_budget} if counted_budget != max_tok else {}),
+                **(
+                    {"token_scale_exact_tokenizer": True}
+                    if prof.tokenizer_registry is not None
+                    else {}
+                ),
                 "segments_offered": int(fw_stats.get("segments_offered", segments_offered_pre)),
                 "segments_kept": int(fw_stats.get("segments_kept", 0)),
                 "segments_thinned": int(fw_stats.get("segments_thinned", 0)),
