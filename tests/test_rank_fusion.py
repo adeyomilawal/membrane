@@ -21,13 +21,17 @@ def _mems() -> list[MemoryItem]:
     ]
 
 
-def _compile(question: str, **kw):
-    cc = ContextCompiler(max_tokens=900, model_id=MODEL, core_content="Be brief.", **kw)
+def _compile(question: str, max_tokens: int = 900, **kw):
+    kw.setdefault("thin_before_drop", False)
+    cc = ContextCompiler(max_tokens=max_tokens, model_id=MODEL, core_content="Be brief.", **kw)
     return cc.compile(memories=_mems(), user_message=question)
 
 
 def _kept(result) -> list[int]:
-    return [int(n) for n in re.findall(r"door code: (\d+)", result.messages[-1]["content"])]
+    """Door codes of the memories that kept their full text."""
+    lines = result.messages[-1]["content"].splitlines()
+    full = "\n".join(line for line in lines if not line.endswith("…"))
+    return [int(n) for n in re.findall(r"door code: (\d+)", full)]
 
 
 def test_last_ranked_memory_survives_when_the_question_names_it():
@@ -56,3 +60,12 @@ def test_no_effect_when_everything_fits():
         return cc.compile(memories=_mems(), user_message="door code for office Tavira-39?")
 
     assert run().messages == run(rank_fusion=False).messages
+
+
+def test_fusion_decides_which_memories_keep_their_full_text_when_thinning():
+    question = "What is the door code for office Tavira-39?"
+    r = _compile(question, thin_before_drop=True, max_tokens=1200)
+    full = _kept(r)
+    assert 0 < len(full) < 40
+    assert 1039 in full
+    assert len(r.ref_map) == 40, "the rest are thinned, not dropped"

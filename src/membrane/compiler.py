@@ -36,6 +36,14 @@ from membrane.firewall import (
     _ref_map_from_text,
     count_tokens,
 )
+from membrane.keyframes import (
+    DEFAULT_KEYFRAME_TOKENS,
+    THIN_MARK,
+    cached_terms,
+    document_frequency,
+    keyframe,
+)
+from membrane.keyframes import terms as _terms
 from membrane.layout import ContextLayoutEngine
 from membrane.observability.profiler import LatencyProfiler
 from membrane.lod import compute_attention_shift
@@ -211,6 +219,7 @@ DEFAULT_MESSAGE_OVERHEAD_TOKENS = 3
 DEFAULT_HISTORY_SHARE = 0.75
 _EARLIER_HEADER = "--- Earlier conversation ---"
 _MEMORIES_HEADER = "--- Memories ---"
+_EXCERPT_NOTE = "(Lines ending in … are excerpts of longer memories.)"
 
 MEMORY_PLACEMENT_SYSTEM = "system"
 MEMORY_PLACEMENT_END = "end"
@@ -466,17 +475,11 @@ def _trim_history_chunked(
     return history[start:], start
 
 
-# Words and identifiers: "call_12" and "ABC-123" stay whole, so a bare "12" does not match them.
-_TERM = re.compile(r"[A-Za-z0-9]+(?:[-_'][A-Za-z0-9]+)*")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
 _PASSAGE_WORDS = 60
 _RECALL_SCAN = 256  # ranked passages token-counted per compile, at most
 _LEADING_REF = re.compile(r"^\s*\[Mem:\d+[^\]]*\]:?\s*")
 _RECALL_ROLES = {"user": "user", "assistant": "assistant", "tool": "tool result"}
-
-
-def _terms(text: str) -> frozenset[str]:
-    return frozenset(t.lower() for t in _TERM.findall(text))
 
 
 @lru_cache(maxsize=8192)
@@ -561,6 +564,40 @@ def _fused_keep_order(segments: Sequence[tuple[str, int]], query: str) -> list[i
         range(len(segments)),
         key=lambda i: (-(1.0 / (_RRF_K + i) + 1.0 / (_RRF_K + lexical_rank[i])), i),
     )
+
+
+def _thin_forms(
+    segments: Sequence[tuple[str, int]],
+    skip: set[str],
+    history: Sequence[dict[str, Any]],
+    count_fn: Callable[[str], int],
+    cap: int,
+) -> list[str | None]:
+    """Thin form of each segment: its ``[Mem:N]`` ref, its keyframe and an ellipsis.
+
+    Density is measured over the segments on offer and the conversation so far. ``None``
+    where a segment has no sentence under the cap, where thinning would save nothing, or
+    where the segment is in ``skip``.
+    """
+    bodies: list[tuple[str, str]] = []
+    for text, _ in segments:
+        lead = _LEADING_REF.match(text)
+        prefix = lead.group(0) if lead else ""
+        bodies.append((prefix, text[len(prefix) :]))
+    corpus = [cached_terms(body) for _, body in bodies]
+    corpus += [
+        cached_terms(m["content"]) for m in history if isinstance(m.get("content"), str)
+    ]
+    df, n = document_frequency(corpus)
+    out: list[str | None] = []
+    for (text, _), (prefix, body) in zip(segments, bodies, strict=True):
+        frame = None if text in skip else keyframe(body, df, n, count_fn, cap)
+        if frame is None:
+            out.append(None)
+            continue
+        thin = (prefix.strip() + " " if prefix.strip() else "") + frame + THIN_MARK
+        out.append(thin if count_fn(thin) < count_fn(text) else None)
+    return out
 
 
 def _message_text(message: dict[str, Any]) -> str:
@@ -754,6 +791,14 @@ class ContextCompiler:
     passed, so nothing changes when everything fits. It is skipped when a reranker supplies
     weights.
 
+    With ``thin_before_drop`` (default, end placement) no memory is dropped while another
+    still has its full text. Every memory has a keyframe: its densest sentence under
+    ``keyframe_tokens`` (mean rarity of its words over the memories on offer and the
+    conversation). Under pressure the keyframes of all memories are placed first, then
+    memories get their full text back in priority order while room lasts. A thinned memory
+    keeps its ``[Mem:N]`` ref and ends in ``…``; ``metadata["segments_thinned"]`` counts
+    them. A memory with no sentence under the cap is kept whole or dropped, as before.
+
     ``message_overhead_tokens`` is what the provider bills per chat message on top of its
     content (3 for OpenAI chat models), plus the same again once for reply priming. The
     budget reserves it so the billed request stays under ``max_tokens``;
@@ -773,6 +818,8 @@ class ContextCompiler:
     recall_evicted_history: bool = True
     rank_fusion: bool = True
     message_overhead_tokens: int = DEFAULT_MESSAGE_OVERHEAD_TOKENS
+    thin_before_drop: bool = True
+    keyframe_tokens: int = DEFAULT_KEYFRAME_TOKENS
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.history_share <= 1.0:
@@ -799,6 +846,7 @@ class ContextCompiler:
         count_fn: Callable[[str], int],
         tier_shares: dict[int, float] | None = None,
         pinned_tiers: set[int] | None = None,
+        thin: bool = True,
     ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[int, str], int, dict[str, Any]]:
         """Build end block, trim the middle under ``max_tok``, and format provider messages.
 
@@ -851,13 +899,13 @@ class ContextCompiler:
         # System message (when there is one), the final user message, and reply priming.
         fixed_framing = overhead * ((1 if core_text.strip() else 0) + 2)
         evicted: list[dict[str, Any]] = []
+        full_history = history
         if self.trim_history and history:
             # Stable inputs only (budget, core, framing), so the grid never moves between turns.
             base = max(0, max_tok - fixed_framing - count_fn(core_text))
             history_limit = int(base * self.history_share)
             # Extra grid steps only when this turn's own end block would not fit.
             limit = min(history_limit, base - count_fn(end_text + directives_block))
-            full_history = history
             history, history_dropped = _trim_history_chunked(
                 history,
                 limit,
@@ -898,13 +946,31 @@ class ContextCompiler:
         headers = 0
         if recalled_texts:
             headers = count_fn(f"{_EARLIER_HEADER}\n{_MEMORIES_HEADER}\n")
+        end_with_directives = end_text + directives_block
+        history_tokens = sum(count_fn(_message_text(m)) for m in history)
+        thin_forms: list[str | None] | None = None
+        if thin and self.thin_before_drop and middle_segments:
+            # Keyframes are only worked out when the memories do not all fit.
+            room = max_tok - framing - headers - count_fn(core_text) - history_tokens
+            room -= count_fn(end_with_directives) + len(history) + len(middle_segments) + 8
+            if sum(count_fn(text) for text, _ in middle_segments) > room:
+                thin_forms = _thin_forms(
+                    middle_segments,
+                    recalled_texts,
+                    full_history,
+                    count_fn,
+                    self.keyframe_tokens,
+                )
+                if any(thin_forms):
+                    headers += count_fn(_EXCERPT_NOTE + "\n")
+                else:
+                    thin_forms = None
         firewall = PreFlightContextFirewall(
             max_tokens=max_tok - framing - headers, count_fn=count_fn
         )
         history_text = "\n\n".join(_message_text(m) for m in history)
         # History is part of the cached prefix: reserved here, only trimmed above in chunks.
         # Directives ride in the final user message, so they are reserved too.
-        end_with_directives = end_text + directives_block
         reserved_end = (
             history_text + "\n\n" + end_with_directives if history_text else end_with_directives
         )
@@ -916,14 +982,18 @@ class ContextCompiler:
             segment_weights=segment_weights,
             tier_shares=tier_shares,
             pinned_tiers=pinned_tiers,
+            thin_segments=thin_forms,
         )
         kept = list(fw_stats.pop("kept_segments", []))
+        thinned: dict[str, str] = fw_stats.pop("thinned_segments", {})
         earlier = sorted(
             (seg for seg in kept if seg in recalled_texts), key=recall_order.__getitem__
         )  # chronological
         kept = [seg for seg in kept if seg not in recalled_texts]
         if given_order:
-            kept.sort(key=lambda seg: given_order.get(seg, len(given_order)))
+            kept.sort(key=lambda seg: given_order.get(thinned.get(seg, seg), len(given_order)))
+        if thinned:
+            kept = [_EXCERPT_NOTE, *kept]
         if earlier:
             kept = [_EARLIER_HEADER, *earlier, _MEMORIES_HEADER, *kept]
         tail = ("\n".join(kept) + "\n\n" + end_text) if kept else end_text
@@ -1298,6 +1368,7 @@ class ContextCompiler:
                     count_fn=_count_ctx,
                     tier_shares=tier_shares,
                     pinned_tiers=pinned_tiers,
+                    thin=compressed_middle is None,
                 )
             )
         if compressed_middle is not None and fw_stats.get("segments_kept"):
@@ -1339,6 +1410,7 @@ class ContextCompiler:
                 "tokens_budget": max_tok,
                 "segments_offered": int(fw_stats.get("segments_offered", segments_offered_pre)),
                 "segments_kept": int(fw_stats.get("segments_kept", 0)),
+                "segments_thinned": int(fw_stats.get("segments_thinned", 0)),
                 "memory_kinds_present": memory_kinds_present,
                 "memories_truncated": layout.last_truncated_count,
                 "stale_survivors": stale_survivors,
@@ -1763,6 +1835,7 @@ class ContextCompiler:
                     count_fn=_count_ctx,
                     tier_shares=tier_shares,
                     pinned_tiers=pinned_tiers,
+                    thin=compressed_middle is None,
                 )
             )
         if compressed_middle is not None and fw_stats.get("segments_kept"):
@@ -1804,6 +1877,7 @@ class ContextCompiler:
                 "tokens_budget": max_tok,
                 "segments_offered": int(fw_stats.get("segments_offered", segments_offered_pre)),
                 "segments_kept": int(fw_stats.get("segments_kept", 0)),
+                "segments_thinned": int(fw_stats.get("segments_thinned", 0)),
                 "memory_kinds_present": memory_kinds_present,
                 "memories_truncated": layout.last_truncated_count,
                 "stale_survivors": stale_survivors,

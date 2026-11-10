@@ -126,6 +126,7 @@ class PreFlightContextFirewall:
         segment_weights: Sequence[float | int] | None = None,
         tier_shares: Mapping[int, float] | None = None,
         pinned_tiers: AbstractSet[int] | None = None,
+        thin_segments: Sequence[str | None] | None = None,
     ) -> tuple[str, dict[int, str], int, dict[str, Any]]:
         """
         Build final context string under max_tokens; trim middle by priority.
@@ -141,8 +142,16 @@ class PreFlightContextFirewall:
         pass; space a tier leaves unused is filled by the others in a second pass.
         ``pinned_tiers`` are offered before all other tiers and are not limited by shares.
 
+        ``thin_segments`` (aligned with ``middle_segments``) switches to level-of-detail
+        packing: a segment's thin form is a short excerpt that keeps its ``[Mem:N]`` ref, or
+        ``None`` when it has none. Thin forms of every segment are packed first, in priority
+        order; then segments are upgraded to their full text in the same order while room
+        lasts. Nothing is dropped until everything else has been thinned. Pinned tiers get
+        their full text before any thin form is placed.
+
         ``stats`` includes ``segments_offered``, ``segments_kept``, ``tokens_trimmed`` (middle only)
-        and ``kept_segments`` (surviving middle texts, in emitted order).
+        and ``kept_segments`` (surviving middle texts, in emitted order). With ``thin_segments``
+        it also has ``segments_thinned`` and ``thinned_segments`` (thin text -> full text).
         """
         count = self._count
         ref_map = dict(ref_map or {})
@@ -156,11 +165,14 @@ class PreFlightContextFirewall:
                 range(len(segs)),
                 key=lambda i: (-float(segment_weights[i]), segs[i][1]),
             )
-            sorted_segments = [segs[i] for i in order]
         else:
-            sorted_segments = sorted(segs, key=lambda x: (x[1], 0))
+            order = sorted(range(len(segs)), key=lambda i: segs[i][1])
         if pinned_tiers:
-            sorted_segments.sort(key=lambda x: x[1] not in pinned_tiers)
+            order.sort(key=lambda i: segs[i][1] not in pinned_tiers)
+        sorted_segments = [segs[i] for i in order]
+        thin: list[str | None] = [None] * len(segs)
+        if thin_segments is not None and len(thin_segments) == len(segs):
+            thin = [thin_segments[i] for i in order]
         offered_tok = sum(count(s[0]) for s in sorted_segments)
 
         core_tok = count(core_text)
@@ -193,42 +205,75 @@ class PreFlightContextFirewall:
         kept_idx: list[int] = []
         deferred: list[int] = []
 
-        def _take(i: int) -> bool:
+        spent: dict[int, int] = {}  # tokens each placed segment holds (thin or full)
+        full: set[int] = set()
+
+        def _place(i: int, text: str, *, whole: bool) -> bool:
+            """Place ``text`` for segment ``i``, replacing its thin form if it has one."""
             nonlocal budget, procedural_count
-            seg_text, tier = sorted_segments[i]
-            seg_tok = count(seg_text)
-            if seg_tok > budget:
+            tier = sorted_segments[i][1]
+            extra = count(text) - spent.get(i, 0)
+            if extra > budget:
                 return False
-            if tier == TIER_PROCEDURAL:
-                if procedural_count >= 3:
-                    return False
-                procedural_count += 1
-            kept_idx.append(i)
-            budget -= seg_tok
-            used[tier] = used.get(tier, 0) + seg_tok
+            if i not in spent:
+                if tier == TIER_PROCEDURAL:
+                    if procedural_count >= 3:
+                        return False
+                    procedural_count += 1
+                kept_idx.append(i)
+            budget -= extra
+            used[tier] = used.get(tier, 0) + extra
+            spent[i] = spent.get(i, 0) + extra
+            if whole:
+                full.add(i)
             return True
 
+        def _take(i: int) -> bool:
+            return _place(i, sorted_segments[i][0], whole=True)
+
+        if any(t is not None for t in thin):
+            for i, (_, tier) in enumerate(sorted_segments):
+                if pinned_tiers and tier in pinned_tiers:
+                    _take(i)
+            for i, excerpt in enumerate(thin):
+                if excerpt is not None and i not in spent:
+                    _place(i, excerpt, whole=False)
         for i, (seg_text, tier) in enumerate(sorted_segments):
+            if i in full:
+                continue
             if (
                 tier in shares
-                and used.get(tier, 0) + count(seg_text) > shares[tier] * middle_budget
+                and used.get(tier, 0) + count(seg_text) - spent.get(i, 0)
+                > shares[tier] * middle_budget
             ):
                 deferred.append(i)
                 continue
             _take(i)
         for i in deferred:
             _take(i)
-        kept = [sorted_segments[i][0] for i in sorted(kept_idx)]
+        kept_idx.sort()
+        kept = [sorted_segments[i][0] if i in full else str(thin[i]) for i in kept_idx]
 
-        # Separators and token merges at joins are not in the per-segment counts:
-        # drop the lowest-priority kept segments until the assembled text fits.
+        # Separators and token merges at joins are not in the per-segment counts: thin, then
+        # drop, the lowest-priority kept segments until the assembled text fits.
         while True:
             middle_str = "\n".join(kept)
             final = core_text + "\n\n" + middle_str + "\n\n" + end_text
             total = count(final)
             if total <= self.max_tokens or not kept:
                 break
-            kept.pop()
+            for position in range(len(kept_idx) - 1, -1, -1):
+                i = kept_idx[position]
+                if i in full and thin[i] is not None:
+                    full.discard(i)
+                    kept[position] = str(thin[i])
+                    break
+            else:
+                kept.pop()
+                kept_idx.pop()
+        thinned = {
+            str(thin[i]): sorted_segments[i][0] for i in kept_idx if i not in full
+        }
 
         kept_refs: dict[int, str] = {}
         for seg_text in kept:
@@ -242,6 +287,9 @@ class PreFlightContextFirewall:
             "tokens_trimmed": max(0, int(offered_tok - kept_tok)),
             "kept_segments": list(kept),
         }
+        if thin_segments is not None:
+            stats["segments_thinned"] = len(thinned)
+            stats["thinned_segments"] = thinned
         return final, kept_refs, total, stats
 
 
