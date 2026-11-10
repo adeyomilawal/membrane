@@ -17,19 +17,25 @@ Strategies, each given the same core prompt, memories, history and budget:
   priority and the renderer keeps everything at or above the lowest priority cutoff that
   fits (binary search). Core and question are pinned, memories rank above history, newer
   history ranks above older. Layout as typically written: memories in the system message.
-  This is a reimplementation, not the ``priompt`` package itself.
+  This is a reimplementation, not the ``priompt`` package itself. These priorities
+  reproduce naive's drop order, so ``priompt`` and ``naive`` tie by construction.
+- ``priompt-recent``: Priompt with the last 6 history messages ranked above all memories
+  and older history below them, a common chat scheme.
 - ``membrane-end``: Membrane defaults (``memory_placement="end"``, chunked history trim).
 - ``membrane-system``: Membrane with ``memory_placement="system"`` (last turn only).
 
-Offline metrics (no network): input tokens, simulated prompt-cache hits (OpenAI rules:
-longest prefix shared with the previous request, at least 1,024 tokens, in 128-token
+Offline metrics (no network), averaged over 5 seeds: input tokens (OpenAI chat framing:
+content plus 3 tokens per message plus 3 for reply priming), simulated prompt-cache hits
+(OpenAI rules: longest prefix shared with the previous request, at least 1,024 tokens, in 128-token
 steps), relative input cost, and needle recall (is the answer anywhere in the prompt).
 Recall is an upper bound on answer quality: a model cannot answer from text it never saw.
 
 Live mode (``--live``, needs ``OPENAI_API_KEY``) sends every request to OpenAI and reports
 answer accuracy (the reply contains the code) and the provider's real ``cached_tokens``.
 Assistant turns stay scripted so all strategies see identical history. Cost with the
-default ``gpt-4o-mini`` is roughly 4 x 24 requests x ~6k tokens, about $0.10.
+default ``gpt-4o-mini`` is roughly 5 strategies x 5 seeds x 24 requests x ~5k tokens,
+about $0.50. Live mode has not been run by the maintainers yet: until it is, recall is the
+only quality number and it is an upper bound.
 
 Run: ``uv run python -m benchmarks.peer_comparison [--budget N] [--memories N] [--live]``
 
@@ -58,9 +64,10 @@ BUDGET = 6_000
 MEMORIES_PER_TURN = 8
 HISTORY_QUESTION_EVERY = 4
 HISTORY_LOOKBACK = 10
-SEED = 7
+SEED = 1
 CACHED_PRICE = {"cache reads 0.5x (OpenAI)": 0.5, "cache reads 0.1x (Anthropic)": 0.1}
-STRATEGIES = ("naive", "priompt", "membrane-end", "membrane-system")
+STRATEGIES = ("naive", "priompt", "priompt-recent", "membrane-end", "membrane-system")
+SEEDS = (1, 2, 3, 4, 5)
 
 CORE = "\n".join(
     f"Guideline {i}: answer precisely, cite [Mem:N] when you rely on memory, "
@@ -136,8 +143,20 @@ def build_scenario(seed: int = SEED, memories_per_turn: int = MEMORIES_PER_TURN)
 # --- strategies -------------------------------------------------------------------------
 
 
+# OpenAI chat framing (cookbook ``num_tokens_from_messages``): every message costs 3 tokens
+# on top of its content, 1 more with a ``name``, and every reply is primed with 3 tokens.
+TOKENS_PER_MESSAGE = 3
+TOKENS_PER_NAME = 1
+REPLY_PRIMING = 3
+
+
 def _tokens(messages: list[dict]) -> int:
-    return count_tokens(_serialize(messages))
+    """Billed prompt tokens for a chat request, the same count for every strategy."""
+    total = REPLY_PRIMING
+    for m in messages:
+        total += TOKENS_PER_MESSAGE + count_tokens(str(m.get("content") or ""))
+        total += TOKENS_PER_NAME if m.get("name") else 0
+    return total
 
 
 def _serialize(messages: list[dict]) -> str:
@@ -163,11 +182,17 @@ def naive(turn: Turn, history: list[dict], budget: int) -> list[dict]:
 
 
 def priompt(turn: Turn, history: list[dict], budget: int) -> list[dict]:
-    pinned = 1_000_000
     elements: list[tuple[int, str, object]] = [
         (3_000 - 10 * rank, "mem", m) for rank, m in enumerate(turn.memories)
     ]
     elements += [(1_000 + i, "hist", m) for i, m in enumerate(history)]
+    return _priompt_render(turn, elements, budget)
+
+
+def _priompt_render(
+    turn: Turn, elements: list[tuple[int, str, object]], budget: int
+) -> list[dict]:
+    pinned = 1_000_000
 
     def render(cutoff: int) -> list[dict]:
         mems = [o for p, k, o in elements if k == "mem" and p >= cutoff]
@@ -184,6 +209,20 @@ def priompt(turn: Turn, history: list[dict], budget: int) -> list[dict]:
         else:
             lo = mid + 1
     return render(levels[lo])
+
+
+def priompt_recent(turn: Turn, history: list[dict], budget: int) -> list[dict]:
+    """Priompt with a common chat scheme: the last 6 history messages outrank all memories,
+    memories rank by retrieval order, older history comes last."""
+    recent = 6
+    n = len(history)
+    elements: list[tuple[int, str, object]] = [
+        (3_000 - 10 * rank, "mem", m) for rank, m in enumerate(turn.memories)
+    ]
+    elements += [
+        ((5_000 if i >= n - recent else 1_000) + i, "hist", m) for i, m in enumerate(history)
+    ]
+    return _priompt_render(turn, elements, budget)
 
 
 def _membrane(placement: str, budget: int) -> Callable[[Turn, list[dict], int], list[dict]]:
@@ -206,7 +245,7 @@ def _membrane(placement: str, budget: int) -> Callable[[Turn, list[dict], int], 
 def strategy(name: str, budget: int) -> Callable[[Turn, list[dict], int], list[dict]]:
     if name.startswith("membrane-"):
         return _membrane(name.removeprefix("membrane-"), budget)
-    return {"naive": naive, "priompt": priompt}[name]
+    return {"naive": naive, "priompt": priompt, "priompt-recent": priompt_recent}[name]
 
 
 # --- measurement ------------------------------------------------------------------------
@@ -273,7 +312,7 @@ def run(name: str, turns: list[Turn], budget: int, live_model: str | None = None
     for turn in turns:
         messages = build(turn, history, budget)
         request = _serialize(messages)
-        tokens = count_tokens(request)
+        tokens = _tokens(messages)
         score.input_tokens += tokens
         score.over_budget += tokens > budget
         if previous:
@@ -292,39 +331,63 @@ def run(name: str, turns: list[Turn], budget: int, live_model: str | None = None
     return score
 
 
-def _pct(xs: list[bool]) -> str:
-    return f"{100 * sum(xs) / len(xs):.0f}%" if xs else "-"
+def _rate(xs: list[bool]) -> float:
+    return sum(xs) / len(xs) if xs else 0.0
 
 
-def report(scores: dict[str, Score], live: bool, budget: int, memories: int) -> str:
-    n_mem = len(next(iter(scores.values())).recall["memory"])
-    n_hist = len(next(iter(scores.values())).recall["history"])
+def run_all(
+    seeds: tuple[int, ...], budget: int, memories: int, live_model: str | None = None
+) -> dict[str, list[Score]]:
+    """Every strategy on every seed: {strategy: [Score per seed]}."""
+    scenarios = [build_scenario(seed, memories) for seed in seeds]
+    return {n: [run(n, turns, budget, live_model) for turns in scenarios] for n in STRATEGIES}
+
+
+def report(
+    results: dict[str, list[Score]], live: bool, budget: int, memories: int, seeds: int
+) -> str:
+    first = next(iter(results.values()))[0]
     out = [
-        f"{TURNS}-turn chat, budget {budget:,} tokens, {memories} memories per turn "
-        f"({n_mem} memory questions, {n_hist} history questions)\n",
+        f"{TURNS}-turn chat, budget {budget:,} tokens, {memories} memories per turn, "
+        f"{seeds} seeds ({len(first.recall['memory'])} memory + "
+        f"{len(first.recall['history'])} history questions per seed)",
+        "Recall: mean over seeds (worst seed). Tokens counted with OpenAI chat framing.\n",
         f"{'strategy':<16} {'input tok':>10} {'cached':>7} {'over budget':>12} "
-        f"{'recall mem':>11} {'recall hist':>12}",
+        f"{'recall mem':>13} {'recall hist':>13}",
     ]
-    for name, s in scores.items():
+
+    def recall(scores: list[Score], kind: str) -> str:
+        rates = [_rate(s.recall[kind]) for s in scores]
+        return f"{100 * sum(rates) / len(rates):.0f}% ({100 * min(rates):.0f}%)"
+
+    for name, scores in results.items():
+        tokens = sum(s.input_tokens for s in scores)
+        cached = sum(s.cached_tokens for s in scores)
+        over = sum(s.over_budget for s in scores)
         out.append(
-            f"{name:<16} {s.input_tokens:>10,} {100 * s.cached_tokens / s.input_tokens:>6.0f}% "
-            f"{s.over_budget:>12} {_pct(s.recall['memory']):>11} {_pct(s.recall['history']):>12}"
+            f"{name:<16} {tokens // len(scores):>10,} {100 * cached / tokens:>6.0f}% "
+            f"{over:>12} {recall(scores, 'memory'):>13} {recall(scores, 'history'):>13}"
         )
     out.append("\nRelative input cost (naive = 100), simulated cache:")
     for label, price in CACHED_PRICE.items():
-        base = scores["naive"].cost(price)
-        cells = "  ".join(f"{n}={100 * s.cost(price) / base:.0f}" for n, s in scores.items())
+        base = sum(s.cost(price) for s in results["naive"])
+        cells = "  ".join(
+            f"{n}={100 * sum(s.cost(price) for s in sc) / base:.0f}" for n, sc in results.items()
+        )
         out.append(f"  {label:<30} {cells}")
     if live:
         out.append("\nLive (OpenAI):")
         out.append(
             f"{'strategy':<16} {'prompt tok':>10} {'cached':>7} {'acc mem':>8} {'acc hist':>9}"
         )
-        for name, s in scores.items():
+        for name, scores in results.items():
+            prompt = sum(s.live_input for s in scores)
+            cached = sum(s.live_cached for s in scores)
+            mem = [x for s in scores for x in s.live_correct["memory"]]
+            hist = [x for s in scores for x in s.live_correct["history"]]
             out.append(
-                f"{name:<16} {s.live_input:>10,} "
-                f"{100 * s.live_cached / max(1, s.live_input):>6.0f}% "
-                f"{_pct(s.live_correct['memory']):>8} {_pct(s.live_correct['history']):>9}"
+                f"{name:<16} {prompt // len(scores):>10,} {100 * cached / max(1, prompt):>6.0f}% "
+                f"{100 * _rate(mem):>7.0f}% {100 * _rate(hist):>8.0f}%"
             )
     return "\n".join(out)
 
@@ -337,13 +400,14 @@ def main() -> None:
     parser.add_argument(
         "--memories", type=int, default=MEMORIES_PER_TURN, help="memories retrieved per turn"
     )
+    parser.add_argument("--seeds", type=int, default=len(SEEDS), help="number of seeds")
     args = parser.parse_args()
     if args.live and not os.environ.get("OPENAI_API_KEY"):
         parser.error("--live needs OPENAI_API_KEY")
-    turns = build_scenario(memories_per_turn=args.memories)
+    seeds = tuple(range(1, args.seeds + 1))
     live_model = args.model if args.live else None
-    scores = {n: run(n, turns, args.budget, live_model) for n in STRATEGIES}
-    print(report(scores, args.live, args.budget, args.memories))
+    results = run_all(seeds, args.budget, args.memories, live_model)
+    print(report(results, args.live, args.budget, args.memories, len(seeds)))
 
 
 if __name__ == "__main__":
