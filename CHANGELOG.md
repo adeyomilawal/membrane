@@ -2,7 +2,12 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.2.0] — Unreleased
+## [Unreleased]
+
+- Ship a `py.typed` marker so type checkers use Membrane's annotations.
+- Link the project website from the package metadata and README.
+
+## [0.2.0] — 2026-11-10
 
 First open-source release, published on PyPI as **`membrane-aol`** (imports as `membrane`).
 

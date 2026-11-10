@@ -6,6 +6,8 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 
+[Website](https://consilience.icu/products/membrane) · [PyPI](https://pypi.org/project/membrane-aol/) · [Issues](https://github.com/adeyomilawal/membrane/issues)
+
 Membrane is a prompt compiler for LLM applications. You give it your system rules, the memories
 your retriever found, the conversation so far and the current user turn. It returns a
 provider-ready message list that fits a hard token budget, puts the important content where
