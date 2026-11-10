@@ -1,7 +1,9 @@
 """Hard benchmark suite: Membrane against real context-management products.
 
-Nine stress scenarios, five seeds each, every strategy fed the same core prompt, retrieved
-memories, conversation history and token budget. All offline and deterministic.
+Eleven stress scenarios, five seeds each, every strategy fed the same core prompt, retrieved
+memories, conversation history and token budget. Budgets are in tiktoken tokens for every
+strategy: Membrane runs with ``token_scale=1.0``, so no per-model calibration shrinks or
+grows its budget. All offline and deterministic.
 
 Products under test:
 
@@ -41,6 +43,12 @@ Membrane picks which memories and which dropped history to keep partly by the wo
 share with the question. In most scenarios the question names what it asks for ("project
 Atlas", "trip 12"), which helps that. ``paraphrase`` removes the help: its questions share
 no rare word with the facts, so only retrieval rank and recency are left.
+
+Facts in most scenarios are one sentence, which flatters anything that keeps one sentence
+per message. ``split-fact`` spreads each history fact over two sentences, ``spread-fact``
+over two or three in varied wording (sometimes with an unrelated sentence in between), and
+``spread-reworded`` also asks for it in other words ("journey twelve" for "trip 12"). In
+those the recall check needs every sentence that carries part of the fact.
 - ``over``: turns over budget before glue. ``invalid``: requests with a tool result
   separated from its call, which providers reject.
 - ``ms``: median build time per turn. The harness pre-counts tokens for naive, LangChain
@@ -88,6 +96,8 @@ class Scenario:
     paste_turns: tuple[int, ...] = ()  # turns where the user pastes a long document
     paraphrase: bool = False  # questions share no rare word with the fact they ask for
     split_fact: bool = False  # the history fact is spread over two sentences of its message
+    spread_fact: bool = False  # ... over two or three sentences, in one of several wordings
+    reworded: bool = False  # history questions share no rare word with the fact
 
 
 SCENARIOS = (
@@ -123,6 +133,25 @@ SCENARIOS = (
         "split-fact", "history facts spread over two sentences of one message", 40, 6_000, 8,
         lookbacks=(3, 8, 15), history_every=2, split_fact=True,
     ),
+    Scenario(
+        "spread-fact", "history facts spread over two or three sentences, varied wording",
+        40, 6_000, 8, lookbacks=(3, 8, 15), history_every=2, spread_fact=True,
+    ),
+    Scenario(
+        "spread-reworded", "spread-fact, and history questions use other words", 40, 6_000, 8,
+        lookbacks=(3, 8, 15), history_every=2, spread_fact=True, reworded=True,
+    ),
+)
+
+# Ways a person spreads one fact over several sentences. {t} trip, {g} gate, {c} locker code.
+# The trip is only named in the first sentence and the code only in the last.
+_SPREAD = (
+    "Trip {t} went through gate {g}. It ended at a locker whose code is",
+    "Trip {t} went through gate {g}. The queue was short that morning. My locker code there was",
+    "For trip {t} I used gate {g}. My bags went into a locker. Its code is",
+    "I took gate {g} on trip {t}. That was the quiet one. Afterwards I wrote down the locker "
+    "code, which is",
+    "Gate {g} was the one for trip {t}. The locker I got there opens with",
 )
 
 
@@ -166,7 +195,7 @@ def build_scenario(sc: Scenario, seed: int) -> list[Turn]:
     locker = [fresh("L") for _ in range(sc.turns)]
     badge = [fresh("B") for _ in range(sc.turns)]
     vault = {p: fresh("V") for p in sc.paste_turns}
-    gate = [fresh("G") for _ in range(sc.turns)] if sc.split_fact else []
+    gate = [fresh("G") for _ in range(sc.turns)] if sc.split_fact or sc.spread_fact else []
 
     def is_tool_turn(t: int) -> bool:
         return bool(sc.tool_every) and t % sc.tool_every == 0
@@ -207,6 +236,8 @@ def build_scenario(sc: Scenario, seed: int) -> list[Turn]:
                 if kind == "history"
                 else f"Which release key belongs to initiative {_spell(PROJECTS.index(target))}?"
             )
+        if sc.reworded and kind == "history":
+            ask = f"Which storage combination went with journey {_spell(source)}?"
 
         filler = " ".join(f"note{t}-{k}" for k in range(rng.randint(5, 60)))
         evidence: tuple[str, ...] = ()
@@ -214,6 +245,10 @@ def build_scenario(sc: Scenario, seed: int) -> list[Turn]:
             # The trip is named in one sentence and the code in the next; either alone is
             # useless, so both must reach the prompt.
             fact = f"Trip {t} went through gate {gate[t]}. The locker code I used there is"
+            if kind == "history":
+                evidence = (gate[source], locker[source])
+        elif sc.spread_fact:
+            fact = rng.choice(_SPREAD).format(t=t, g=gate[t])
             if kind == "history":
                 evidence = (gate[source], locker[source])
         else:
@@ -506,7 +541,9 @@ class PriomptRecent(Priompt):
 
 
 class Membrane:
-    options: ClassVar[dict[str, Any]] = {}
+    # Every strategy's budget is in tiktoken tokens, so Membrane's own budget calibration is
+    # pinned off: whatever the model id, it gets the same real budget as the others.
+    options: ClassVar[dict[str, Any]] = {"token_scale": 1.0}
     model: ClassVar[str] = MODEL
 
     def __init__(self, budget: int, sc: Scenario) -> None:
@@ -527,7 +564,7 @@ class Membrane:
 
 
 class MembraneLean(Membrane):
-    options: ClassVar[dict[str, Any]] = {"recall_evicted_history": False}
+    options: ClassVar[dict[str, Any]] = {**Membrane.options, "recall_evicted_history": False}
 
 
 STRATEGIES: dict[str, type] = {

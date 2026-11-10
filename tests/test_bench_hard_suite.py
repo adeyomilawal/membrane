@@ -41,3 +41,43 @@ def test_membrane_stays_in_budget_valid_and_caches_more_than_naive():
             assert table[n]["over"] == 0
             assert table[n]["invalid"] == 0
             assert table[n]["cached"] > table["naive"]["cached"]
+
+
+def test_membrane_budget_is_never_scaled():
+    """Every strategy gets the same real budget: Membrane's token scale is pinned to 1."""
+    for name in ("membrane", "membrane-lean"):
+        strategy = hs.STRATEGIES[name](4_000, BY_NAME["tiny"])
+        assert strategy._compiler.token_scale == 1.0
+    turn = hs.build_scenario(BY_NAME["tiny"], 1)[0]
+    strategy = hs.STRATEGIES["membrane"](4_000, BY_NAME["tiny"])
+    strategy.build(turn, [])
+    assert strategy.last_result.metadata["token_scale"] == 1.0
+
+
+def test_spread_fact_scenarios_need_every_sentence_of_the_fact():
+    for name in ("spread-fact", "spread-reworded"):
+        turns = hs.build_scenario(BY_NAME[name], 1)
+        asked = [t for t in turns if t.kind == "history"]
+        assert asked and all(len(t.evidence) == 2 for t in asked)
+        for n, t in enumerate(turns):
+            # The trip and the code never share a sentence.
+            sentences = t.user.split(". ")
+            assert not any(f"trip {n}" in s.lower() and t.user[-8:-1] in s for s in sentences)
+    reworded = [t for t in hs.build_scenario(BY_NAME["spread-reworded"], 1) if t.kind == "history"]
+    assert all(t.user.startswith("Which storage combination went with journey") for t in reworded)
+
+
+def test_existing_scenarios_did_not_change():
+    """New scenarios must not shift the random stream of the nine older ones."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for name in list(BY_NAME)[:9]:
+        for seed in (1, 5):
+            for t in hs.build_scenario(BY_NAME[name], seed):
+                contents = [m.content for m in t.memories]
+                row = (t.user, t.follow, t.needles, t.kind, contents, t.evidence)
+                digest.update(repr(row).encode())
+    assert digest.hexdigest() == (
+        "e81d16eda3300ca8ff033a27aa8ad5c653a9e54a8f710aedde16435b8a7d639f"
+    )
