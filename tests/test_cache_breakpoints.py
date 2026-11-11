@@ -7,7 +7,7 @@ import json
 from membrane import ContextCompiler, MemoryItem, anthropic_request, get_cache_pricing
 from membrane.cache_format import to_anthropic_params
 from membrane import compiler as comp
-from membrane.compiler import _INDEX_HEADER, _history_cache_pays
+from membrane.compiler import _INDEX_HEADER
 from membrane.provider_registry import CachePricing
 
 CLAUDE = "anthropic/claude-opus-5-5"
@@ -89,58 +89,22 @@ def test_the_eviction_index_sits_in_its_own_system_block_after_the_marked_core()
     assert system[1]["text"].lstrip().startswith(_INDEX_HEADER)
 
 
-def test_history_is_not_marked_when_a_cut_comes_before_it_can_be_read(monkeypatch):
-    # About 600 tokens a turn against a cut every ~690: at most one read per cut. With a
-    # write premium that needs two reads to pay off, the history is never worth marking.
+def test_history_is_always_marked_whatever_the_prices(monkeypatch):
+    # The marker used to be held back when a cut was expected before the history could be
+    # read back. Measured, that saved about 0.1% of cost, so the history is always marked.
     dear = CachePricing(mode="marked", write=2.5, read=0.1, min_tokens=512)
     monkeypatch.setattr(comp, "get_cache_pricing", lambda model_id: dear)
     for turns in range(14, 22):
         r = _compile(max_tokens=3600, turns=turns, words=290)
         md = r.metadata
         assert md["history_messages_dropped"] > 0
-        assert 0 <= md["history_cache_expected_reads"] < 1.5
-        assert [p["reason"] for p in md["cache_breakpoints"]] == ["core"]
-        assert _markers(anthropic_request(r)) == 1
-    # Automatic caching has no write premium, so there is nothing to hold back.
+        assert "history_cache_expected_reads" not in md
+        assert [p["reason"] for p in md["cache_breakpoints"]] == ["core", "history"]
+        assert _markers(anthropic_request(r)) == 2
     monkeypatch.undo()
     auto = _compile(GPT, max_tokens=3600, turns=20, words=290)
     assert [p["reason"] for p in auto.metadata["cache_breakpoints"]] == ["core", "history"]
     assert auto.metadata["cache_mode"] == "automatic"
-
-
-def test_once_marked_since_the_cut_the_history_stays_marked():
-    # Real prices: one expected read pays. Follow a conversation turn by turn: within one
-    # cut, a marked request is never followed by an unmarked one, which would throw away
-    # the read of what the earlier request wrote.
-    previous: tuple[int, bool] | None = None
-    seen = set()
-    for turns in range(4, 40):
-        r = _compile(max_tokens=3600, turns=turns, words=150)
-        dropped = r.metadata["history_messages_dropped"]
-        marked = any(p["reason"] == "history" for p in r.metadata["cache_breakpoints"])
-        if previous is not None and previous[0] == dropped and previous[1]:
-            assert marked
-        previous = (dropped, marked)
-        seen.add(marked)
-    assert True in seen
-
-
-def test_turns_until_cut_replays_the_requests_since_the_cut():
-    # Limit 1,000 and step 400 at 200 tokens a turn. Five turns fit: each request had one
-    # turn less room than the one before.
-    assert comp._turns_until_cut(_history(5), [100] * 10, 0, 1000, 400) == [4, 3, 2, 1, 0]
-    # The sixth turn forced the first cut (4 messages). One request since: 200 tokens of
-    # room left on the grid, 200 a turn.
-    assert comp._turns_until_cut(_history(6), [100] * 12, 4, 1000, 400) == [1.0]
-
-
-def test_the_decision_follows_the_prices():
-    claude = CachePricing(mode="marked", write=1.25, read=0.1)
-    assert not _history_cache_pays(claude, 0.2)  # 0.2 reads save 0.18, the write costs 0.25
-    assert _history_cache_pays(claude, 0.3)
-    assert _history_cache_pays(CachePricing(mode="marked", write=2.0, read=0.1), 1.2)
-    assert not _history_cache_pays(CachePricing(mode="marked", write=2.0, read=0.1), 1.0)
-    assert _history_cache_pays(CachePricing(), 0.0)
 
 
 def test_nothing_is_marked_below_the_models_minimum():

@@ -16,11 +16,11 @@
 
 `anthropic_system_blocks(prefix, tail)` returns a list of content blocks: the first text block includes `cache_control: {type: ephemeral}` when the prefix is non-empty; the tail is a separate block without cache control.
 
-For a compile result, use `anthropic_request(result)` instead: it returns the `system` blocks and the `messages` with `cache_control` placed at `result.metadata["cache_breakpoints"]` (after the core, and after the history when the cache prices say that pays), and converts tool calls and tool results.
+For a compile result, use `anthropic_request(result)` instead: it returns the `system` blocks and the `messages` with `cache_control` placed at `result.metadata["cache_breakpoints"]` (after the core and after the history), and converts tool calls and tool results.
 
 ## Prices and breakpoints
 
-`provider_registry.get_cache_pricing(model_id)` returns the model's cache write and read multipliers, its minimum cacheable prefix and whether caching is `automatic` or `marked` (the `cache_pricing` section of the capability map). With end placement, compile reports `cache_breakpoints` in metadata. The history breakpoint is left out when a history cut is expected before the history could be read back: the write premium would not be earned. See the `ContextCompiler` docstring for the rule.
+`provider_registry.get_cache_pricing(model_id)` returns the model's cache write and read multipliers, its minimum cacheable prefix and whether caching is `automatic` or `marked` (the `cache_pricing` section of the capability map). With end placement, compile reports `cache_breakpoints` in metadata. Both are reported whenever the prefix reaches the model's minimum cacheable size.
 
 ## Ollama / local models
 

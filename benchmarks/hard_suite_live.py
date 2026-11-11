@@ -12,8 +12,8 @@ API and reports, per scenario and strategy:
 - ``errors``: requests the API rejected (for example a tool result split from its call).
 
 Cache breakpoints: Membrane's requests are built by ``membrane.anthropic_request`` from the
-breakpoints the compiler reports (after the core; after the history when the cache prices
-say that pays), compiled with the live model's id so its cache prices and minimum apply.
+breakpoints the compiler reports (after the core and after the history), compiled with the
+live model's id so its minimum cacheable size applies.
 The other strategies get a breakpoint after the core system prompt, and one after the last
 history message when their system message is the core alone; where memories sit in the
 system message that breakpoint would be written every turn and never read, so it is left

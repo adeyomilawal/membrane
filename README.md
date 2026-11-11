@@ -382,7 +382,6 @@ calls.
 | `segments_thinned` | Memories and passages cut to their keyframe |
 | `cache_breakpoints` | Where a cached prefix ends: `{"message_index", "tokens", "reason"}`, plus `"chars"` inside a message |
 | `cache_mode` | `"automatic"` (the provider caches by itself) or `"marked"` (the request must mark the prefix) |
-| `history_cache_expected_reads` | Turns the history is expected to last before the next cut |
 | `token_scale` / `token_scale_samples` | Provider tokens per counted token, and how many `observe` calls shaped it |
 | `tokens_budget_counted` | The budget in counted tokens (`tokens_budget / token_scale`), when the scale is not 1 |
 | `message_framing_tokens` | Per-message framing reserved in the budget (`token_count` is content only) |
@@ -519,13 +518,9 @@ system prompt, and after the conversation history. Tool calls and tool results i
 converted to `tool_use` and `tool_result` blocks. Nothing is marked below the model's minimum
 cacheable size (512 to 4,096 tokens depending on the model).
 
-The history marker follows the cache prices. A cut rewrites the history, and writing to the cache
-costs more than plain input (1.25x on Anthropic), so the history is marked only when it is
-expected to be read back before the next cut: the room left before the cut over the mean size of
-a turn. Once a request since the cut has marked it, later ones keep the marker. In practice this
-only holds the marker back when the budget is so small that a cut comes every turn or two; in a
-simulation of the 3,000-token scenario it saved about 0.1% of input cost, so do not expect much
-from it. Pass `ttl="1h"` for the one-hour cache. `anthropic_request` needs end placement (the
+The history is always marked. An earlier version held the marker back when a cut was expected
+before the history could be read again; in a simulation of the 3,000-token scenario that saved
+about 0.1% of input cost, so the rule was removed. Pass `ttl="1h"` for the one-hour cache. `anthropic_request` needs end placement (the
 default); `anthropic_system_blocks(prefix, tail)` is still there for text you split yourself.
 
 ### Local models
