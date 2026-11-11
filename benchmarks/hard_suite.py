@@ -24,6 +24,9 @@ Products under test:
   decides the priority cutoff with its own renderer and token counts.
 - ``membrane``: ``ContextCompiler`` defaults.
 - ``membrane-lean``: ``recall_evicted_history=False``.
+- ``membrane-embed`` / ``membrane-lean-embed``: the two above with ``embedder=`` set to
+  fastembed's BAAI/bge-small-en-v1.5 (``--extra lod``; the model is downloaded on first
+  use). Not part of the default run: name them in ``--strategies``.
 
 For LangChain and LlamaIndex the retrieved memories go into the system message, as in
 their RAG chat patterns. A user of either can move memories next to the question by hand
@@ -654,6 +657,42 @@ class MembraneLean(Membrane):
     options: ClassVar[dict[str, Any]] = {**Membrane.options, "recall_evicted_history": False}
 
 
+_EMBEDDED: dict[str, list[float]] = {}
+_EMBED_MODEL: Any = None
+
+
+def _shared_embedder(texts: Any) -> list[list[float]]:
+    """fastembed's default model, loaded on first use; vectors shared by every run so a
+    text is embedded once per process."""
+    global _EMBED_MODEL
+    if _EMBED_MODEL is None:
+        from membrane.lod import fastembed_embedder
+
+        _EMBED_MODEL = fastembed_embedder()
+    missing = [t for t in dict.fromkeys(texts) if t not in _EMBEDDED]
+    if missing:
+        _EMBEDDED.update(zip(missing, _EMBED_MODEL(missing), strict=True))
+    return [_EMBEDDED[t] for t in texts]
+
+
+class MembraneEmbed(Membrane):
+    """Membrane with ``embedder=`` set to fastembed's BAAI/bge-small-en-v1.5 (the ``lod``
+    extra). Only run when named in ``--strategies``; its ``ms`` includes the model."""
+
+    options: ClassVar[dict[str, Any]] = {**Membrane.options, "embedder": _shared_embedder}
+
+    def __init__(self, budget: int, sc: Scenario) -> None:
+        import fastembed  # noqa: F401  (ImportError marks the strategy as not installed)
+
+        super().__init__(budget, sc)
+
+
+class MembraneLeanEmbed(MembraneEmbed):
+    options: ClassVar[dict[str, Any]] = {**MembraneEmbed.options, "recall_evicted_history": False}
+
+
+OPT_IN = ("membrane-embed", "membrane-lean-embed")
+
 STRATEGIES: dict[str, type] = {
     "naive": Naive,
     "langchain": LangChainTrim,
@@ -665,6 +704,8 @@ STRATEGIES: dict[str, type] = {
     "priompt-node-recent": PriomptNodeRecent,
     "membrane": Membrane,
     "membrane-lean": MembraneLean,
+    "membrane-embed": MembraneEmbed,
+    "membrane-lean-embed": MembraneLeanEmbed,
 }
 
 
@@ -809,6 +850,8 @@ def main(argv: list[str] | None = None) -> None:
         if unknown:
             parser.error(f"not available: {', '.join(unknown)}")
         strategies = {n: c for n, c in strategies.items() if n in wanted}
+    else:
+        strategies = {n: c for n, c in strategies.items() if n not in OPT_IN}
     results: dict[str, dict[str, dict[str, Any]]] = {}
     for sc in SCENARIOS:
         if args.scenario and sc.name not in args.scenario:

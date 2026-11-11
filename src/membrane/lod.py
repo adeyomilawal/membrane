@@ -1,10 +1,11 @@
-"""LOD engine: attention-shift detection via embedding centroid."""
+"""LOD engine: attention-shift detection via embedding centroid, and a fastembed embedder
+for ``ContextCompiler(embedder=...)``."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from membrane import config as os_config
 
@@ -19,13 +20,37 @@ def _get_embedding_model():
     global _embedding_model
     if _embedding_model is None:
         try:
-            from fastembed.embedding import TextEmbedding
+            from fastembed import TextEmbedding
 
             _embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
         except Exception as e:
             logger.warning("fastembed not available for LOD (%s); attention_shift will be False", e)
             _embedding_model = False
     return _embedding_model
+
+
+def fastembed_embedder(
+    model_name: str = "BAAI/bge-small-en-v1.5",
+) -> Callable[[Sequence[str]], list[list[float]]]:
+    """An embedding function for ``ContextCompiler(embedder=...)``, backed by fastembed.
+
+    Needs the ``lod`` extra (``pip install "membrane-aol[lod]"``). The model runs locally
+    on the CPU; fastembed downloads it the first time it is used (about 130 MB for the
+    default) and loads it when this function is called. Nothing is loaded or downloaded
+    unless you call this.
+    """
+    try:
+        from fastembed import TextEmbedding
+    except ImportError as exc:
+        raise ImportError(
+            'fastembed is not installed; install it with: pip install "membrane-aol[lod]"'
+        ) from exc
+    model = TextEmbedding(model_name=model_name)
+
+    def embed(texts: Sequence[str]) -> list[list[float]]:
+        return [vector.tolist() for vector in model.embed([t.strip() or " " for t in texts])]
+
+    return embed
 
 
 def embed_texts(texts: Sequence[str]):

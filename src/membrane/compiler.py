@@ -703,9 +703,9 @@ class _RecallIndex:
         return self.candidates, self.postings, self.ends[len(key)]
 
 
-def _rank_postings(postings: dict[str, list[int]], n: int, query: str, limit: int) -> list[int]:
-    """The first ``limit`` candidate indices in the order :func:`_rank_recall` gives, found
-    through the postings so only candidates that share a term with the query are scored."""
+def _posting_scores(postings: dict[str, list[int]], n: int, query: str) -> dict[int, float]:
+    """Lexical relevance (see :func:`_relevance`) of the first ``n`` candidates that share a
+    term with the query, read from the postings."""
     hits: dict[int, float] = {}
     for term in sorted(_terms(query)):
         found = postings.get(term)
@@ -715,7 +715,36 @@ def _rank_postings(postings: dict[str, list[int]], n: int, query: str, limit: in
             weight = math.log(1.0 + n / known)
             for i in islice(found, known):
                 hits[i] = hits.get(i, 0.0) + weight
-    ranked = sorted(hits, key=lambda i: (-hits[i], -i))[:limit]
+    return hits
+
+
+def _rank_postings(
+    postings: dict[str, list[int]],
+    n: int,
+    query: str,
+    limit: int,
+    similarity: Sequence[float] | None = None,
+) -> list[int]:
+    """The first ``limit`` candidate indices in the order :func:`_rank_recall` gives, found
+    through the postings so only candidates that share a term with the query are scored.
+
+    With ``similarity`` (one value per candidate, from an embedder) the order is the
+    reciprocal rank fusion of that lexical order and the similarity order; candidates that
+    share no term with the query share the last lexical rank.
+    """
+    hits = _posting_scores(postings, n, query)
+    by_words = sorted(hits, key=lambda i: (-hits[i], -i))
+    if similarity is not None:
+        lexical = _shared_ranks(by_words, hits)
+        last = len(by_words)
+        by_meaning = sorted(range(n), key=lambda i: (-similarity[i], -i))
+        semantic = _shared_ranks(by_meaning, similarity)
+        fused = {
+            i: 1.0 / (_RRF_K + lexical.get(i, last)) + 1.0 / (_RRF_K + semantic[i])
+            for i in range(n)
+        }
+        return sorted(fused, key=lambda i: (-fused[i], -i))[:limit]
+    ranked = by_words[:limit]
     newest = n - 1
     while len(ranked) < limit and newest >= 0:
         if newest not in hits:
@@ -796,25 +825,96 @@ def _rank_recall(candidates: list[tuple[str, frozenset[str]]], query: str) -> li
 _RRF_K = 60  # the usual reciprocal-rank-fusion constant
 
 
-def _fused_keep_order(segments: Sequence[tuple[str, int]], query: str) -> list[int]:
+def _shared_ranks(order: Sequence[int], scores: Any) -> dict[int, int]:
+    """Rank of each index in ``order`` (best first); equal scores share the last rank of
+    their group: a tie says nothing, so it earns nothing."""
+    rank: dict[int, int] = {}
+    for position in range(len(order) - 1, -1, -1):
+        i = order[position]
+        below = order[position + 1] if position + 1 < len(order) else None
+        tied = below is not None and scores[below] == scores[i]
+        rank[i] = rank[below] if tied else position  # type: ignore[index]
+    return rank
+
+
+def _fused_keep_order(
+    segments: Sequence[tuple[str, int]],
+    query: str,
+    similarity: Sequence[float] | None = None,
+) -> list[int]:
     """Segment indices in the order they should be offered to the firewall.
 
     Reciprocal rank fusion of the given order (the retriever's rank) and lexical relevance
-    to the query. Texts with equal relevance share the last rank of their group: a tie says
-    nothing, so it earns nothing, and with no lexical signal this is the given order.
+    to the query. Texts with equal relevance share the last rank of their group, so with no
+    lexical signal this is the given order. ``similarity`` (one value per segment, from an
+    embedder) adds a third rank, with the same rule for ties.
     """
     scores = _relevance([_terms(_LEADING_REF.sub("", text)) for text, _ in segments], query)
-    by_relevance = sorted(range(len(segments)), key=lambda i: -scores[i])
-    lexical_rank: dict[int, int] = {}
-    for position in range(len(by_relevance) - 1, -1, -1):
-        i = by_relevance[position]
-        below = by_relevance[position + 1] if position + 1 < len(by_relevance) else None
-        tied = below is not None and scores[below] == scores[i]
-        lexical_rank[i] = lexical_rank[below] if tied else position  # type: ignore[index]
-    return sorted(
-        range(len(segments)),
-        key=lambda i: (-(1.0 / (_RRF_K + i) + 1.0 / (_RRF_K + lexical_rank[i])), i),
-    )
+    everyone = range(len(segments))
+    lexical_rank = _shared_ranks(sorted(everyone, key=lambda i: -scores[i]), scores)
+    semantic_rank: dict[int, int] | None = None
+    if similarity is not None:
+        by_meaning = sorted(everyone, key=lambda i: (-similarity[i], i))
+        semantic_rank = _shared_ranks(by_meaning, similarity)
+
+    def fused(i: int) -> float:
+        value = 1.0 / (_RRF_K + i) + 1.0 / (_RRF_K + lexical_rank[i])
+        if semantic_rank is not None:
+            value += 1.0 / (_RRF_K + semantic_rank[i])
+        return value
+
+    return sorted(everyone, key=lambda i: (-fused(i), i))
+
+
+Embedder = Callable[[Sequence[str]], Sequence[Sequence[float]]]
+_EMBEDDING_CACHE_SIZE = 50_000
+
+
+class _Embeddings:
+    """Vectors from the caller's embedder, kept by text so each text is embedded once.
+
+    Vectors are normalised when stored; with numpy installed they are arrays and the
+    similarities are one matrix product, otherwise plain Python.
+    """
+
+    def __init__(self) -> None:
+        self.vectors: dict[str, Any] = {}
+        self.warned = False
+        try:
+            import numpy
+        except ImportError:  # pragma: no cover - numpy is in the dev environment
+            numpy = None  # type: ignore[assignment]
+        self.np: Any = numpy
+
+    def _unit(self, vector: Sequence[float]) -> Any:
+        values = [float(x) for x in vector]
+        norm = math.sqrt(sum(x * x for x in values)) or 1.0
+        unit = [x / norm for x in values]
+        return self.np.asarray(unit, dtype=self.np.float64) if self.np is not None else unit
+
+    def similarities(self, embed: Embedder, texts: Sequence[str], query: str) -> list[float] | None:
+        """Cosine similarity of each text to the query, or ``None`` when the embedder fails
+        (the caller then ranks by words alone)."""
+        try:
+            missing = list(dict.fromkeys(t for t in (*texts, query) if t not in self.vectors))
+            if missing:
+                vectors = list(embed(missing))
+                if len(vectors) != len(missing):
+                    raise ValueError(f"{len(vectors)} vectors for {len(missing)} texts")
+                while len(self.vectors) + len(missing) > _EMBEDDING_CACHE_SIZE and self.vectors:
+                    self.vectors.pop(next(iter(self.vectors)))
+                for text, vector in zip(missing, vectors, strict=True):
+                    self.vectors[text] = self._unit(vector)
+            target = self.vectors[query]
+            rows = [self.vectors[t] for t in texts]
+            if self.np is not None:
+                return [float(x) for x in self.np.stack(rows) @ target] if rows else []
+            return [sum(a * b for a, b in zip(row, target, strict=True)) for row in rows]
+        except Exception as exc:
+            if not self.warned:
+                self.warned = True
+                logger.warning("embedder failed (%s); ranking by words only", exc)
+            return None
 
 
 class _ConversationCounts:
@@ -1127,6 +1227,17 @@ class ContextCompiler:
     with the question, placed after every memory's keyframe and before memories get their
     full text back.
 
+    ``embedder`` (default ``None``) is an optional function from a list of texts to one
+    vector each. With it, the two choices above that go by shared words also go by meaning:
+    which memories keep their full text (a third rank in the fusion) and which passages of
+    dropped history come back (lexical order fused with similarity to the question). It
+    decides nothing else: keyframes, the index of dropped history and the history cut are
+    unchanged. Each text is embedded once per compiler and the question once per turn; if
+    the function raises, that compile ranks by words alone. ``metadata["semantic_ranking"]``
+    is set when it was used. Membrane ships no model: pass your own function, or
+    ``membrane.lod.fastembed_embedder()`` with the ``lod`` extra. The time and any network
+    use are the function's.
+
     ``message_overhead_tokens`` is what the provider bills per chat message on top of its
     content (3 for OpenAI chat models), plus the same again once for reply priming. The
     budget reserves it so the billed request stays under ``max_tokens``;
@@ -1151,6 +1262,10 @@ class ContextCompiler:
     eviction_index: bool = True
     index_share: float = DEFAULT_INDEX_SHARE
     token_scale: float | None = None
+    embedder: Embedder | None = None
+    _embeddings: _Embeddings = field(
+        default_factory=_Embeddings, init=False, repr=False, compare=False
+    )
     _conversations: dict[str | None, _ConversationCounts] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -1345,11 +1460,17 @@ class ContextCompiler:
         # Under pressure, which memories survive is decided by the retriever's rank fused
         # with relevance to this turn; the survivors are still emitted in the given order.
         given_order: dict[str, int] = {}
+        semantic_ranking = False
         if self.rank_fusion and segment_weights is None and len(middle_segments) > 1:
             for i, (text, _) in enumerate(middle_segments):
                 given_order.setdefault(text, i)
+            similarity = self._similarity(
+                [_LEADING_REF.sub("", text) for text, _ in middle_segments], user_message
+            )
+            semantic_ranking = similarity is not None
             middle_segments = [
-                middle_segments[i] for i in _fused_keep_order(middle_segments, user_message)
+                middle_segments[i]
+                for i in _fused_keep_order(middle_segments, user_message, similarity)
             ]
         recalled_texts: set[str] = set()
         recall_order: dict[str, int] = {}
@@ -1358,7 +1479,11 @@ class ContextCompiler:
             # Capped at one chunk so recall does not inflate every request to the full budget.
             candidates, postings, known = self._recall_index(evicted_key, evicted)
             recall_cap, recalled = max(1, history_limit // 2), []
-            ranked = _rank_postings(postings, known, user_message, _RECALL_SCAN)
+            similarity = self._similarity(
+                [_EARLIER_LABEL.sub("", candidates[i][0]) for i in range(known)], user_message
+            )
+            semantic_ranking = semantic_ranking or similarity is not None
+            ranked = _rank_postings(postings, known, user_message, _RECALL_SCAN, similarity)
             for i in ranked:
                 text = candidates[i][0]
                 cost = line_cost(text)
@@ -1456,6 +1581,8 @@ class ContextCompiler:
         }
         if recalled_texts:
             cache_meta["history_messages_recalled"] = earlier_kept
+        if semantic_ranking:
+            cache_meta["semantic_ranking"] = True
         if index_lines:
             cache_meta["history_index_lines"] = len(index_lines)
             cache_meta["history_index_tokens"] = system_tokens - core_tokens
@@ -1600,6 +1727,13 @@ class ContextCompiler:
             self._index_cache[key] = state
             state.budget = budget()
         return state.within(state.budget, count_fn)
+
+    def _similarity(self, texts: Sequence[str], query: str) -> list[float] | None:
+        """Similarity of each text to the question from the caller's embedder, or ``None``
+        without one (or when it fails or the question is empty)."""
+        if self.embedder is None or not texts or not query.strip():
+            return None
+        return self._embeddings.similarities(self.embedder, texts, query)
 
     def _recall_index(
         self,
@@ -2661,6 +2795,7 @@ def compile_anonymous(
     keyframe_tokens: int = DEFAULT_KEYFRAME_TOKENS,
     message_overhead_tokens: int = DEFAULT_MESSAGE_OVERHEAD_TOKENS,
     token_scale: float | None = None,
+    embedder: Embedder | None = None,
 ) -> CompileResult:
     """No long-term memory: core + conversation + user message.
 
@@ -2672,9 +2807,10 @@ def compile_anonymous(
     ``memory_placement="end"`` gives the layout :class:`ContextCompiler` uses by default:
     system message, history as chat messages, the question last. It honours every history
     option of the compiler (``trim_history``, ``history_share``, ``recall_evicted_history``,
-    ``eviction_index``, ``index_share``, ``keyframe_tokens``) and reports the same metadata,
-    cache breakpoints included. Each call is independent, so for a long conversation a
-    ``ContextCompiler`` you keep is faster: it remembers what it has already counted.
+    ``eviction_index``, ``index_share``, ``keyframe_tokens``, ``embedder``) and reports the
+    same metadata, cache breakpoints included. Each call is independent, so for a long
+    conversation a ``ContextCompiler`` you keep is faster: it remembers what it has already
+    counted.
     """
     if memory_placement not in MEMORY_PLACEMENTS:
         raise ValueError(
@@ -2696,6 +2832,7 @@ def compile_anonymous(
             keyframe_tokens=keyframe_tokens,
             message_overhead_tokens=message_overhead_tokens,
             token_scale=token_scale,
+            embedder=embedder,
         )
         result = compiler.compile(
             memories=[],
