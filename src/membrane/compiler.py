@@ -564,22 +564,27 @@ class _IndexState:
 
     def add_cut(
         self,
-        batch: Sequence[tuple[str, str | None, int]],
+        batch: Sequence[tuple[Any, ...]],
         count_fn: Callable[[str], int],
         cap: int,
     ) -> None:
-        """Add the messages one cut dropped: first to the counts, then their lines."""
+        """Add the messages one cut dropped: first to the counts, then their lines. Each is
+        (role, text, tokens) and, for a tool result, the call that produced it."""
         texts = [
-            (_RECALL_ROLES[role], text, size)
-            for role, text, size in batch
+            (_RECALL_ROLES[role], text, size, call[0] if call else None)
+            for role, text, size, *call in batch
             if role in _RECALL_ROLES and text and text.strip()
         ]
-        for _, text, _ in texts:
+        for _, text, _, _ in texts:
             self.n += add_sentences(self.df, text)
-        for label, text, size in texts:
+        for label, text, size, call in texts:
             limit = 1 + size // (_INDEX_COMPRESSION * max(1, cap))
             frames = keyframes(text, self.df, self.n, count_fn, cap, limit)
             if frames:
+                if call:
+                    # A tool result answers a call; without it the line may mean nothing.
+                    name = call.split(" ", 1)[0]
+                    label = f"{label} ({call if count_fn(call) <= cap else name})"
                 # An old citation must not claim a ref in this turn's ref_map.
                 line = f"{label}: " + f"{THIN_MARK} ".join(frames)
                 self.lines.append(line.replace("[Mem:", "[mem:"))
@@ -598,8 +603,28 @@ class _IndexState:
         return lines
 
 
+def _tool_calls(history: Sequence[dict[str, Any]]) -> dict[int, str]:
+    """For each tool result in ``history`` (by position): the call that produced it, as its
+    name and arguments. Only OpenAI-style ``tool_calls`` are read; anything else has none."""
+    calls: dict[str, str] = {}
+    out: dict[int, str] = {}
+    for position, message in enumerate(history):
+        for call in message.get("tool_calls") or ():
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict) and function.get("name") and call.get("id"):
+                arguments = function.get("arguments")
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments, sort_keys=True) if arguments else ""
+                calls[str(call["id"])] = " ".join(f"{function['name']} {arguments}".split())
+        if message.get("role") == "tool":
+            found = calls.get(str(message.get("tool_call_id")))
+            if found:
+                out[position] = found
+    return out
+
+
 def _eviction_index(
-    evicted: Sequence[tuple[str, str | None, int]],
+    evicted: Sequence[tuple[Any, ...]],
     starts: tuple[int, ...],
     count_fn: Callable[[str], int],
     cap: int,
@@ -607,12 +632,13 @@ def _eviction_index(
 ) -> tuple[str, ...]:
     """One line per dropped message: its role and its keyframe, oldest first.
 
-    ``evicted`` is (role, text, tokens) for every dropped message; ``starts`` are the cuts
-    that dropped them. A message's keyframe is scored over the conversation up to the cut
-    that dropped it, so its line never changes afterwards and the index only grows at a
-    cut. A long message keeps one keyframe for every ten caps of its length, so a pasted
-    document is not reduced to a single sentence. Over ``budget`` (header included), the
-    oldest lines go.
+    ``evicted`` is (role, text, tokens) for every dropped message, plus the call for a tool
+    result (see :func:`_tool_calls`); ``starts`` are the cuts that dropped them. A tool result's
+    line names its call, so the result still means something on its own. A message's keyframe is
+    scored over the conversation up to the cut that dropped it, so its line never changes
+    afterwards and the index only grows at a cut. A long message keeps one keyframe for every
+    ten caps of its length, so a pasted document is not reduced to a single sentence. Over
+    ``budget`` (header included), the oldest lines go.
     """
     state, previous = _IndexState(), 0
     for start in starts:
@@ -1241,7 +1267,7 @@ class ContextCompiler:
         # message, and reply priming.
         fixed_framing = overhead * ((1 if core_text.strip() or indexing else 0) + 2)
         evicted: list[dict[str, Any]] = []
-        evicted_key: tuple[tuple[str, str | None, int], ...] = ()
+        evicted_key: tuple[tuple[Any, ...], ...] = ()
         history_tokens: int | None = None
         full_history = history
         index_lines: tuple[str, ...] = ()
@@ -1262,9 +1288,15 @@ class ContextCompiler:
             )
             evicted = full_history[:history_dropped]
             history_tokens = sum(sizes[history_dropped:]) - overhead * len(history)
+            calls = _tool_calls(evicted) if indexing else {}
             evicted_key = tuple(
-                (str(m.get("role")), c if isinstance(c := m.get("content"), str) else None, size)
-                for m, size in zip(evicted, sizes, strict=False)
+                (
+                    str(m.get("role")),
+                    c if isinstance(c := m.get("content"), str) else None,
+                    size,
+                    *((calls[i],) if i in calls else ()),
+                )
+                for i, (m, size) in enumerate(zip(evicted, sizes, strict=False))
             )
             if history:
                 until_cut = _turns_until_cut(
@@ -1521,7 +1553,7 @@ class ContextCompiler:
 
     def _index_lines(
         self,
-        evicted: tuple[tuple[str, str | None, int], ...],
+        evicted: tuple[tuple[Any, ...], ...],
         full_history: list[dict[str, Any]],
         sizes: list[int],
         step: int,
@@ -1556,7 +1588,7 @@ class ContextCompiler:
 
     def _recall_index(
         self,
-        key: tuple[tuple[str, str | None, int], ...],
+        key: tuple[tuple[Any, ...], ...],
         evicted: list[dict[str, Any]],
     ) -> tuple[list[tuple[str, frozenset[str]]], dict[str, list[int]]]:
         """Passages of the dropped history and their postings, built once per cut."""

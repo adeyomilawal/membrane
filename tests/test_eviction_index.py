@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from membrane import ContextCompiler, MemoryItem
 from membrane.compiler import _INDEX_HEADER, _cut_starts, _eviction_index
 from membrane.firewall import count_tokens
@@ -85,10 +87,47 @@ def test_tool_results_get_a_line_and_tool_call_stubs_do_not():
         memories=[], user_message="now", conversation_messages=_history(20, tools=True)
     )
     lines = _index(r)
-    assert "tool result: Badge for site 0: B9000." in lines
+    # The line names the call that produced the result, so it means something on its own.
+    assert "tool result (f {}): Badge for site 0: B9000." in lines
     assert not any("tool_calls" in line or line.startswith("assistant: None") for line in lines)
     roles = [line.split(":")[0] for line in lines[:3]]
-    assert roles == ["user", "tool result", "assistant"]
+    assert roles == ["user", "tool result (f {})", "assistant"]
+
+
+def test_a_tool_result_line_names_its_call_and_drops_long_arguments():
+    from membrane.compiler import _tool_calls
+
+    def turn(i: int, arguments) -> list[dict]:
+        call = {"id": f"c{i}", "function": {"name": "find_orders", "arguments": arguments}}
+        return [
+            {"role": "user", "content": f"Anything for customer {i}? " + "Please check. " * 8},
+            {"role": "assistant", "content": None, "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": f"c{i}", "content": f"Order O{500 + i} is open."},
+            {"role": "assistant", "content": f"Order O{500 + i} is open. " + "Noted. " * 30},
+        ]
+
+    history = [m for i in range(30) for m in turn(i, f'{{"customer": {i}}}')]
+    assert _tool_calls(history)[2] == 'find_orders {"customer": 0}'
+    lines = _index(_cc(max_tokens=3000).compile(
+        memories=[], user_message="now", conversation_messages=history
+    ))
+    tool_lines = [line for line in lines if line.startswith("tool result")]
+    assert tool_lines and all(
+        re.fullmatch(r'tool result \(find_orders \{"customer": (\d+)\}\): Order O5\1 is open\.', x)
+        or re.fullmatch(r'tool result \(find_orders \{"customer": \d\}\): Order O50\d is open\.', x)
+        for x in tool_lines
+    )
+    # Arguments given as an object are written as JSON; very long ones leave only the name.
+    history = [m for i in range(30) for m in turn(i, {"customer": i, "note": "x " * 80})]
+    lines = _index(_cc(max_tokens=3000).compile(
+        memories=[], user_message="now", conversation_messages=history
+    ))
+    tool_lines = [line for line in lines if line.startswith("tool result")]
+    assert tool_lines
+    assert all(x.startswith("tool result (find_orders): Order O5") for x in tool_lines)
+    # A result whose call is unknown keeps the plain label.
+    orphan = [{"role": "user", "content": "hi"}, {"role": "tool", "content": "r"}]
+    assert _tool_calls(orphan) == {}
 
 
 def test_over_its_share_the_oldest_lines_go():
