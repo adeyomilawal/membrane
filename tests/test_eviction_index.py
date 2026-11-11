@@ -269,3 +269,21 @@ def test_a_long_message_keeps_one_keyframe_per_ten_caps_of_length():
     assert frames.index("The vault code in document 5 is V4417.") < frames.index(
         "My badge number is B2290."
     ), "keyframes keep the order they had in the message"
+
+
+def test_index_and_cut_do_not_depend_on_recall_evicted_history():
+    """Turning passage recall off must leave the prefix alone: same cut, same index block.
+    The switch only removes the recalled passages from the tail."""
+    with_recall, without = _cc(), _cc(recall_evicted_history=False)
+    for turns in range(8, 60, 3):
+        kw = {
+            "memories": [MemoryItem(id="m", content=f"Fact for turn {turns}.")],
+            "user_message": f"What is the gate code for site {turns // 3}?",
+            "conversation_messages": _history(turns),
+        }
+        a, b = with_recall.compile(**kw), without.compile(**kw)
+        assert a.messages[:-1] == b.messages[:-1]
+        for key in ("history_messages_dropped", "history_index_lines", "history_index_tokens"):
+            assert a.metadata.get(key) == b.metadata.get(key)
+        assert "--- Earlier conversation ---" not in b.messages[-1]["content"]
+        assert "history_messages_recalled" not in b.metadata
