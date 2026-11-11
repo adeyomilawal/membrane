@@ -60,7 +60,7 @@ def test_index_changes_only_when_the_cut_moves_and_only_by_appending():
     seen: dict[int, str] = {}
     previous: list[str] = []
     cuts = 0
-    for turns in range(4, 70):
+    for turns in range(4, 90):
         r = cc.compile(
             memories=[MemoryItem(id="m", content=f"Fact for turn {turns}.")],
             user_message=f"question {turns} " + "word " * (turns % 7),
@@ -103,17 +103,68 @@ def test_over_its_share_the_oldest_lines_go():
     assert "G7000" not in "\n".join(lines)
 
 
-def test_index_share_comes_out_of_history_not_out_of_the_tail():
+def test_index_room_comes_from_what_history_leaves_not_from_history():
+    """With and without the index the same history is kept word for word."""
     for turns in range(10, 60, 7):
-        r = _cc().compile(memories=[], user_message="now", conversation_messages=_history(turns))
-        prefix = sum(count_tokens(str(m["content"])) + 3 for m in r.messages[:-1])
+        history = _history(turns)
+        r = _cc().compile(memories=[], user_message="now", conversation_messages=history)
+        plain = _cc(eviction_index=False).compile(
+            memories=[], user_message="now", conversation_messages=history
+        )
+        dropped = r.metadata["history_messages_dropped"]
+        assert dropped == plain.metadata["history_messages_dropped"]
         base = 2500 - 9 - count_tokens(CORE)
-        assert prefix - count_tokens(CORE) <= 0.75 * base
+        kept = sum(count_tokens(str(m["content"])) + 3 for m in r.messages[1:-1])
+        assert kept <= 0.75 * base
+        assert r.metadata.get("history_index_tokens", 0) <= 0.125 * base + 2
+        assert r.metadata["token_count"] + r.metadata["message_framing_tokens"] <= 2500
     without = _cc(eviction_index=False).compile(
         memories=[], user_message="now", conversation_messages=_history(30)
     )
     assert "history_index_lines" not in without.metadata
     assert _INDEX_HEADER not in without.messages[0]["content"]
+
+
+def _fat_memories(n: int) -> list[MemoryItem]:
+    return [MemoryItem(id=f"m{i}", content=f"Site {i} note. " + "Detail. " * 30) for i in range(n)]
+
+
+def test_index_shrinks_to_half_its_share_when_memories_crowd_the_budget():
+    history = _history(60)
+    base = 2500 - 9 - count_tokens(CORE)
+    roomy = _cc().compile(memories=[], user_message="now", conversation_messages=history)
+    crowded = _cc().compile(
+        memories=_fat_memories(12), user_message="now", conversation_messages=history
+    )
+    cap = int(0.125 * base)
+    assert cap // 2 < roomy.metadata["history_index_tokens"] <= cap + 2
+    assert 0 < crowded.metadata["history_index_tokens"] <= cap // 2 + 2
+    # Every memory is still there, at least as its keyframe.
+    assert all(f"Site {i} note." in crowded.messages[-1]["content"] for i in range(12))
+    # The newest dropped messages are the ones that keep their line.
+    assert _index(crowded) == _index(roomy)[-len(_index(crowded)) :]
+    assert crowded.metadata["history_messages_dropped"] == roomy.metadata[
+        "history_messages_dropped"
+    ]
+
+
+def test_index_size_is_fixed_at_the_cut_whatever_later_turns_bring():
+    cc = _cc()
+    history = _history(60)
+    first = cc.compile(memories=[], user_message="now", conversation_messages=history)
+    later = cc.compile(
+        memories=_fat_memories(12), user_message="and now", conversation_messages=history
+    )
+    assert later.messages[0] == first.messages[0]
+    assert later.metadata["token_count"] + later.metadata["message_framing_tokens"] <= 2500
+
+
+def test_no_index_when_history_takes_the_whole_budget():
+    r = _cc(history_share=1.0).compile(
+        memories=[], user_message="now", conversation_messages=_history(60)
+    )
+    assert r.metadata["history_messages_dropped"] > 0
+    assert _INDEX_HEADER not in r.messages[0]["content"]
 
 
 def test_old_citations_in_the_index_never_claim_refs():

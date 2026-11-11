@@ -60,7 +60,7 @@ those the recall check needs every sentence that carries part of the fact.
   ``priompt-node`` times include a round trip to the Node process.
 
 Run: ``uv run --extra langchain --extra llamaindex python -m benchmarks.hard_suite``
-Options: ``--scenario NAME`` (repeatable), ``--seeds N``, ``--json PATH``.
+Options: ``--scenario NAME`` (repeatable), ``--seeds N``, ``--strategies a,b``, ``--json PATH``.
 """
 
 from __future__ import annotations
@@ -796,10 +796,19 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--scenario", action="append", choices=[s.name for s in SCENARIOS])
     parser.add_argument("--seeds", type=int, default=5)
     parser.add_argument("--json", help="also write the results to this file")
+    parser.add_argument(
+        "--strategies", help="comma-separated; naive is always run (cost is relative to it)"
+    )
     args = parser.parse_args(argv)
     strategies, missing = available_strategies()
     if missing:
         print(f"Not installed, skipped: {', '.join(missing)}")
+    if args.strategies:
+        wanted = {"naive", *(s.strip() for s in args.strategies.split(","))}
+        unknown = sorted(wanted - set(strategies))
+        if unknown:
+            parser.error(f"not available: {', '.join(unknown)}")
+        strategies = {n: c for n, c in strategies.items() if n in wanted}
     results: dict[str, dict[str, dict[str, Any]]] = {}
     for sc in SCENARIOS:
         if args.scenario and sc.name not in args.scenario:

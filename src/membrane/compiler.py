@@ -235,6 +235,8 @@ _INDEX_CACHE_SIZE = 64
 _EXCERPT_NOTE = "(Lines ending in … are excerpts.)"
 # One keyframe per this many keyframe caps of message: a long paste keeps several lines.
 _INDEX_COMPRESSION = 10
+_INDEX_FLOOR_PART = 2  # the index keeps at least this part of its share under memory pressure
+_THIN_LINE_EXTRA = 8  # a thinned memory line: its keyframe plus the ref, the mark and a line break
 
 MEMORY_PLACEMENT_SYSTEM = "system"
 MEMORY_PLACEMENT_END = "end"
@@ -557,6 +559,7 @@ class _IndexState:
     lines: list[str] = field(default_factory=list)
     df: dict[str, int] = field(default_factory=dict)
     n: int = 0
+    budget: int = 0  # tokens the block may hold, fixed at the cut that built this state
     trimmed: dict[int, tuple[str, ...]] = field(default_factory=dict)
 
     def add_cut(
@@ -1037,9 +1040,10 @@ class ContextCompiler:
     into passages of about 60 words, tool results included, and ranked by the rare words
     they share with the current user message, then by recency. The best passages, up to one
     chunk (half the history limit), join the sacrifice zone as low-priority episodic
-    segments in whatever room the memories leave. No memory is dropped to make room for
-    one; a passage that does not fit whole is cut to the sentence that matches the question
-    (see ``thin_before_drop``). They never enter ``ref_map``;
+    segments in whatever room the memories leave: every memory is offered its place before
+    any passage is, so a passage costs the memories nothing but the two header lines that
+    introduce the passages. A passage that does not fit whole is cut to the sentence that
+    matches the question (see ``thin_before_drop``). They never enter ``ref_map``;
     ``metadata["history_messages_recalled"]`` reports how many survived.
 
     With ``rank_fusion`` (default, end placement) the memories that survive trimming are
@@ -1053,8 +1057,11 @@ class ContextCompiler:
     system message after the core. A line is written when the cut that drops its message
     happens and never changes afterwards, so the block only changes at a cut, where the
     cached prefix after the core is rewritten anyway: it adds no cache breaks. The block
-    has ``index_share`` (default one eighth) of the budget the core leaves, taken out of
-    the history share; over that, its oldest lines go, again only at a cut. Tool results
+    has up to ``index_share`` (default one eighth) of the budget the core leaves, taken
+    from the room history does not use (never out of ``history_share``). At each cut it
+    gets what the question and a keyframe of every memory on offer leave of that room, at
+    least half its share, and keeps that size until the next cut; a compiler that has not
+    seen the cut sizes it from the turn at hand. Over its size the oldest lines go. Tool results
     get a line, tool-call stubs do not. ``metadata["history_index_lines"]`` and
     ``metadata["history_index_tokens"]`` report it, and ``metadata["core_chars"]`` is
     where the core ends inside the system message. Passage recall above still returns
@@ -1242,11 +1249,12 @@ class ContextCompiler:
         if self.trim_history and history:
             # Stable inputs only (budget, core, framing), so the grid never moves between turns.
             base = max(0, max_tok - fixed_framing - core_tokens)
-            index_budget = int(base * self.index_share) if indexing else 0
-            # The index is history in another form, so its room comes out of history's share.
-            history_limit = max(0, int(base * self.history_share) - index_budget)
+            history_limit = max(0, int(base * self.history_share))
+            # The index has its own room in what history leaves, never out of history's share.
+            leftover = base - history_limit
+            index_cap = min(int(base * self.index_share), leftover) if indexing else 0
             # Extra grid steps only when this turn's own end block would not fit.
-            limit = min(history_limit, base - index_budget - end_tokens)
+            limit = min(history_limit, base - index_cap - end_tokens)
             step = max(1, history_limit // 2)
             sizes = [count_fn(_message_text(m)) + overhead for m in history]
             history, history_dropped = _trim_history_chunked(
@@ -1262,7 +1270,19 @@ class ContextCompiler:
                 until_cut = _turns_until_cut(
                     full_history, sizes, history_dropped, history_limit, step
                 )
-            if indexing and evicted:
+            if indexing and evicted and index_cap > 0:
+
+                def index_budget() -> int:
+                    """Asked once per cut: what the question and a keyframe of every memory
+                    on offer leave of the leftover, between half the index's share and all
+                    of it. Memories give up their full text before the index gives up a
+                    line, but the index never costs a memory its keyframe."""
+                    thin = self.keyframe_tokens + _THIN_LINE_EXTRA
+                    wanted = end_tokens + sum(
+                        min(thin, line_cost(text)) for text, _ in middle_segments
+                    )
+                    return min(index_cap, max(index_cap // _INDEX_FLOOR_PART, leftover - wanted))
+
                 index_lines = self._index_lines(
                     evicted_key, full_history, sizes, step, count_fn, index_budget, count_key
                 )
@@ -1506,11 +1526,13 @@ class ContextCompiler:
         sizes: list[int],
         step: int,
         count_fn: Callable[[str], int],
-        budget: int,
+        budget: Callable[[], int],
         count_key: Any,
     ) -> tuple[str, ...]:
         """Eviction index for the current cut. Built once per cut, and from the previous
-        cut's index when that is still at hand, so a cut only scores the messages it drops."""
+        cut's index when that is still at hand, so a cut only scores the messages it drops.
+        Its token budget is asked for when the cut is first seen and kept until the next cut,
+        so the block stays byte-stable between cuts whatever later turns bring."""
         cap = self.keyframe_tokens
         key = (evicted, step, cap, count_key)
         state = self._index_cache.get(key)
@@ -1529,7 +1551,8 @@ class ContextCompiler:
             while len(self._index_cache) >= _INDEX_CACHE_SIZE:
                 self._index_cache.pop(next(iter(self._index_cache)))
             self._index_cache[key] = state
-        return state.within(budget, count_fn)
+            state.budget = budget()
+        return state.within(state.budget, count_fn)
 
     def _recall_index(
         self,

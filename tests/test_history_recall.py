@@ -63,10 +63,13 @@ def test_evicted_history_is_recalled_in_the_tail_chronologically():
 def test_recall_yields_to_memories_under_pressure():
     cc = ContextCompiler(max_tokens=2500, model_id=MODEL, core_content="Be brief.")
     r = cc.compile(memories=_mems(60), user_message="now", conversation_messages=_history(40))
-    assert "history_messages_recalled" not in r.metadata or (
-        r.metadata["history_messages_recalled"] == 0
-    )
-    assert len(r.ref_map) > 0
+    # Every memory is offered its place first; a passage only takes what is left over, so
+    # recall costs the memories at most the room of its two header lines.
+    without = ContextCompiler(
+        max_tokens=2500, model_id=MODEL, core_content="Be brief.", recall_evicted_history=False
+    ).compile(memories=_mems(60), user_message="now", conversation_messages=_history(40))
+    assert len(without.ref_map) - 1 <= len(r.ref_map) < 60
+    assert r.metadata.get("history_messages_recalled", 0) <= 1
 
 
 def test_relevant_old_passage_beats_recent_ones():
