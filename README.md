@@ -31,8 +31,30 @@ memories + rules + history + user turn
 
 ---
 
+## Results at a glance
+
+Eleven stress scenarios (long chats, tool calls, memory floods, long pastes, tight budgets,
+paraphrased questions) sent to the Claude API on 2026-11-11, with the same token budget for every
+library. Accuracy means the reply contained the fact asked for. "Wrong" counts replies that stated
+a different value instead of saying it was unknown. Cost is input cost relative to LangChain = 100.
+
+| | Opus 5.5 accuracy | Wrong | Cost | Haiku 5.5 accuracy | Wrong | Cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| LangChain `trim_messages` | 85% | 21 | 100 | 84% | 25 | 100 |
+| LlamaIndex `Memory` | 79% | 40 | 81 | 77% | 42 | 81 |
+| Priompt | not run | | | 83% | 26 | 100 |
+| **Membrane, defaults** | **99%** | **2** | **63** | **96%** | **7** | **59** |
+| Membrane, `recall_evicted_history=False` | 97% | 9 | 43 | 95% | 12 | 45 |
+
+Read this with its limits: one seed per model, synthetic tasks, Claude models only, and the other
+libraries run with their documented defaults. The suite, the raw results and the scenarios where
+Membrane got worse or stayed behind are under [Benchmarks](#benchmarks).
+
+---
+
 ## Contents
 
+- [Results at a glance](#results-at-a-glance)
 - [Why Membrane](#why-membrane)
 - [Install](#install)
 - [Quickstart](#quickstart)
@@ -703,7 +725,7 @@ To write the compressor against a class instead of a bare function, implement th
 | `memory_placement` | `"end"` | `"end"` (cache-friendly) or `"system"` (single system message) |
 | `trim_history` | `True` | With end placement, drop the oldest history in chunks when over budget |
 | `history_share` | `0.75` | Share of the budget after the core that history may hold in the cached prefix |
-| `recall_evicted_history` | `True` | Bring passages of dropped history back as low-priority recall, picked by relevance to the question, then recency |
+| `recall_evicted_history` | `True` | Bring passages of dropped history back as low-priority recall, picked by relevance to the question, then recency. `False` is the cheap mode: lower cost, a few points less accurate, and not recommended under very small budgets (about 3,000 tokens) |
 | `rank_fusion` | `True` | When memories must be trimmed, choose survivors by your order fused with lexical relevance to the question |
 | `message_overhead_tokens` | `3` | Tokens billed per message on top of content (OpenAI chat framing), reserved in the budget |
 | `thin_before_drop` | `True` | With end placement, place every memory's keyframe before dropping any, then restore full text by priority |
@@ -803,7 +825,10 @@ clean = strip_all_interrupts(text)
 
 See [docs/interrupt-protocol.md](docs/interrupt-protocol.md) for streaming integration.
 
-### Ranking by meaning (optional)
+### Ranking by meaning (experimental)
+
+> Off by default, and in our own measurements it did not improve results (details below). It is
+> here for you to test on your data, not as a recommended setting.
 
 By default Membrane decides what gets its full text by the words an item shares with the
 question. Pass `embedder=` and it also uses similarity of meaning, for two choices only: which

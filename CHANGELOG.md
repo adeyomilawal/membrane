@@ -2,9 +2,9 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.3.0] — 2026-11-11
 
-Default output changes for end placement (history cut, tail layout, system message), so release as 0.3.0.
+Default output changes for end placement (history cut, tail layout, system message), so this is a minor release: prompts compiled by 0.3.0 differ from 0.2.x for the same input.
 
 - **Thin before drop** (`thin_before_drop=True`, end placement). Every memory has a keyframe: its densest sentence under `keyframe_tokens` (40), by how rare its words are across the sentences of the memories on offer and of the conversation. Under pressure all keyframes are placed first, then memories get their full text back in priority order. A thinned memory keeps its `[Mem:N]` ref and ends in `…`; `metadata["segments_thinned"]` counts them. `memory_placement="system"` is unchanged.
 - **Eviction index** (`eviction_index=True`, `index_share=0.125`). Each dropped history message leaves one keyframe line in the system message after the core (tool results included, tool-call stubs not; one keyframe per 400 tokens of a long message). A line is scored at the cut that drops its message and never changes, so the index only changes when the cut moves and adds no cache breaks. `index_share` is its upper bound, not a reservation: its room comes from what history, the question and one keyframe per memory on offer leave (at least half the share), and `history_share` is history's alone, as in 0.2.x. The size is decided when a cut is first seen and kept until the next cut; a new compiler object can size it differently (one cache miss). A tool result's line names the call that produced it (`tool result (find_orders {"customer": 14}): …`). New metadata: `history_index_lines`, `history_index_tokens`, `core_chars`.
