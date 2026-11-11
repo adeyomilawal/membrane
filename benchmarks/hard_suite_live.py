@@ -26,11 +26,15 @@ higher, by the same factor for everyone. Refusal fallbacks are left off on purpo
 refusal counts as a wrong answer instead of being rerouted to another model.
 
 Needs credentials the Anthropic SDK can find (``ANTHROPIC_API_KEY`` or ``ant auth login``).
-Default: 4 strategies, 1 seed, about 1,400 requests and 7.5M prompt tokens.
+Default: 4 strategies, 1 seed, about 1,700 requests.
+
+``--prices`` (dollars per million tokens: input, cache write, cache read, output) makes the
+run report what it spent, and ``--max-usd`` stops it there: no request starts once the total
+reaches the limit, and the scenario in progress is discarded.
 
 Run: ``uv run --extra langchain --extra llamaindex --extra llm-anthropic \\
       python -m benchmarks.hard_suite_live [--model ID] [--seeds N] [--scenario NAME]
-      [--strategies a,b,c] [--workers N]``
+      [--strategies a,b,c] [--workers N] [--prices 4,5,0.2,20 --max-usd 30]``
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
@@ -105,6 +110,40 @@ def for_model(cls: type, model: str) -> type:
     return type(cls.__name__, (cls,), {"model": model_id, "options": options})
 
 
+class SpendLimitReached(RuntimeError):
+    """The run's dollar limit was reached; no further request is sent."""
+
+
+@dataclass
+class Spend:
+    """Running cost of a live run in dollars, shared by every conversation thread.
+
+    ``prices`` are dollars per million tokens: plain input, cache write, cache read, output.
+    With a ``limit`` no request starts once the total has reached it; requests already in
+    flight still finish, so the run can end a little over.
+    """
+
+    prices: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    limit: float | None = None
+    usd: float = 0.0
+    _lock: Any = field(default_factory=threading.Lock, repr=False)
+
+    def check(self) -> None:
+        if self.limit is not None and self.usd >= self.limit:
+            raise SpendLimitReached(f"${self.usd:.2f} spent, limit ${self.limit:.2f}")
+
+    def add(self, usage: Any) -> None:
+        plain, write, read, output = self.prices
+        cost = (
+            usage.input_tokens * plain
+            + (usage.cache_creation_input_tokens or 0) * write
+            + (usage.cache_read_input_tokens or 0) * read
+            + (getattr(usage, "output_tokens", 0) or 0) * output
+        ) / 1e6
+        with self._lock:
+            self.usd += cost
+
+
 @dataclass
 class LiveScore:
     uncached: int = 0
@@ -126,7 +165,12 @@ class LiveScore:
 
 
 def run_live(
-    cls: type, sc: hs.Scenario, turns: list[hs.Turn], client: Any, model: str
+    cls: type,
+    sc: hs.Scenario,
+    turns: list[hs.Turn],
+    client: Any,
+    model: str,
+    spend: Spend | None = None,
 ) -> LiveScore:
     """One conversation, turn by turn, so each request can read the previous one's cache."""
     import anthropic
@@ -137,6 +181,8 @@ def run_live(
         messages, _ = strategy.build(turn, history)
         result = getattr(strategy, "last_result", None)
         breakpoints = result.metadata.get("cache_breakpoints", []) if result else None
+        if spend is not None:
+            spend.check()
         score.requests += 1
         reply = ""
         try:
@@ -150,6 +196,8 @@ def run_live(
             score.errors += 1
         else:
             usage = response.usage
+            if spend is not None:
+                spend.add(usage)
             score.uncached += usage.input_tokens
             score.written += usage.cache_creation_input_tokens or 0
             score.read += usage.cache_read_input_tokens or 0
@@ -222,13 +270,21 @@ def overall(results: dict[str, dict[str, dict[str, Any]]]) -> str:
 
 
 def run_scenario(
-    sc: hs.Scenario, seeds: int, strategies: dict[str, type], client: Any, model: str, workers: int
+    sc: hs.Scenario,
+    seeds: int,
+    strategies: dict[str, type],
+    client: Any,
+    model: str,
+    workers: int,
+    spend: Spend | None = None,
 ) -> dict[str, list[LiveScore]]:
     """Conversations run in parallel; the turns inside each one stay in order."""
     scenarios = [hs.build_scenario(sc, seed) for seed in range(1, seeds + 1)]
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
-            name: [pool.submit(run_live, cls, sc, turns, client, model) for turns in scenarios]
+            name: [
+                pool.submit(run_live, cls, sc, turns, client, model, spend) for turns in scenarios
+            ]
             for name, cls in strategies.items()
         }
         return {name: [f.result() for f in jobs] for name, jobs in futures.items()}
@@ -242,7 +298,23 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--seeds", type=int, default=1)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--json", help="also write the results to this file")
+    parser.add_argument(
+        "--prices",
+        help="dollars per million tokens as input,cache_write,cache_read,output; "
+        "with it the run reports what it spent",
+    )
+    parser.add_argument(
+        "--max-usd", type=float, help="stop sending requests at this spend (needs --prices)"
+    )
     args = parser.parse_args(argv)
+    if args.max_usd is not None and not args.prices:
+        parser.error("--max-usd needs --prices")
+    spend = None
+    if args.prices:
+        prices = tuple(float(x) for x in args.prices.split(","))
+        if len(prices) != 4:
+            parser.error("--prices takes four numbers")
+        spend = Spend(prices=prices, limit=args.max_usd)  # type: ignore[arg-type]
 
     import anthropic
 
@@ -261,13 +333,24 @@ def main(argv: list[str] | None = None) -> None:
     client = anthropic.Anthropic(max_retries=6)
     results: dict[str, dict[str, dict[str, Any]]] = {}
     for sc in scenarios:
-        scores = run_scenario(sc, args.seeds, strategies, client, args.model, args.workers)
+        try:
+            scores = run_scenario(
+                sc, args.seeds, strategies, client, args.model, args.workers, spend
+            )
+        except SpendLimitReached as stop:
+            print(f"\nStopped in {sc.name}: {stop}. Scenarios before it are complete.")
+            break
         first = next(iter(scores.values()))
         results[sc.name] = {n: summarize(s, first) for n, s in scores.items()}
         print(report(sc, results[sc.name], args.seeds, args.model), flush=True)
         if args.json:  # rewritten after every scenario, so a stopped run keeps its results
+            payload: dict[str, Any] = {"model": args.model, "results": results}
+            if spend is not None:
+                payload["spent_usd"] = round(spend.usd, 2)
             with open(args.json, "w") as fh:
-                json.dump({"model": args.model, "results": results}, fh, indent=2)
+                json.dump(payload, fh, indent=2)
+        if spend is not None:
+            print(f"   spent so far: ${spend.usd:.2f}", flush=True)
     if len(results) > 1:
         print(overall(results))
 

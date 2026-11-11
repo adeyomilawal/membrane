@@ -135,3 +135,22 @@ def test_membrane_requests_carry_the_breakpoints_the_compiler_reports():
         marked_history += sum("cache_control" in b for b in blocks)
     # At 3,000 tokens a cut comes every turn or two: history is marked on some turns only.
     assert 0 < marked_history < len(client.requests)
+
+
+def test_spend_limit_stops_new_requests():
+    sc = BY_NAME["tiny"]
+    client = FakeClient()
+    # 100 plain + 20 written + 880 read tokens per request at $1 per token-million each.
+    spend = live.Spend(prices=(1e6, 1e6, 1e6, 1e6), limit=2500.0)
+    with pytest.raises(live.SpendLimitReached):
+        live.run_scenario(sc, 1, {"membrane": hs.Membrane}, client, "m", 1, spend)
+    assert len(client.requests) == 3  # 1,000 dollars each: the fourth never starts
+    assert spend.usd == pytest.approx(3000.0)
+
+
+def test_spend_is_reported_without_a_limit():
+    sc = BY_NAME["tiny"]
+    spend = live.Spend(prices=(4.0, 5.0, 0.2, 20.0))
+    live.run_scenario(sc, 1, {"membrane": hs.Membrane}, FakeClient(), "m", 1, spend)
+    per_request = (100 * 4.0 + 20 * 5.0 + 880 * 0.2) / 1e6
+    assert spend.usd == pytest.approx(sc.turns * per_request)
