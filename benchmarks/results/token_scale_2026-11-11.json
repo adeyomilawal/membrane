@@ -1,0 +1,344 @@
+{
+  "measured_on": "2026-11-11",
+  "counter": "tiktoken cl100k_base",
+  "endpoint": "anthropic messages.count_tokens",
+  "piece_tokens": 2000,
+  "models": {
+    "claude-fable-5-2": {
+      "framing_tokens": 8,
+      "kinds": {
+        "prose": {
+          "mean": 1.5144,
+          "min": 1.505,
+          "max": 1.5318,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.6453,
+          "min": 1.5099,
+          "max": 1.801,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.1122,
+          "min": 1.1089,
+          "max": 1.1175,
+          "pieces": 6
+        }
+      },
+      "mix": 1.424
+    },
+    "claude-haiku-5-5": {
+      "framing_tokens": 8,
+      "kinds": {
+        "prose": {
+          "mean": 1.5144,
+          "min": 1.505,
+          "max": 1.5318,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.6453,
+          "min": 1.5099,
+          "max": 1.801,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.1122,
+          "min": 1.1089,
+          "max": 1.1175,
+          "pieces": 6
+        }
+      },
+      "mix": 1.424
+    },
+    "claude-sonnet-5-5": {
+      "framing_tokens": 8,
+      "kinds": {
+        "prose": {
+          "mean": 1.5144,
+          "min": 1.505,
+          "max": 1.5318,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.6453,
+          "min": 1.5099,
+          "max": 1.801,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.1122,
+          "min": 1.1089,
+          "max": 1.1175,
+          "pieces": 6
+        }
+      },
+      "mix": 1.424
+    },
+    "claude-opus-5-5": {
+      "framing_tokens": 8,
+      "kinds": {
+        "prose": {
+          "mean": 1.5144,
+          "min": 1.505,
+          "max": 1.5318,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.6453,
+          "min": 1.5099,
+          "max": 1.801,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.1122,
+          "min": 1.1089,
+          "max": 1.1175,
+          "pieces": 6
+        }
+      },
+      "mix": 1.424
+    },
+    "claude-fable-5-1": {
+      "framing_tokens": 8,
+      "kinds": {
+        "prose": {
+          "mean": 1.5144,
+          "min": 1.505,
+          "max": 1.5318,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.6453,
+          "min": 1.5099,
+          "max": 1.801,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.1122,
+          "min": 1.1089,
+          "max": 1.1175,
+          "pieces": 6
+        }
+      },
+      "mix": 1.424
+    },
+    "claude-opus-5": {
+      "framing_tokens": 6,
+      "kinds": {
+        "prose": {
+          "mean": 1.5144,
+          "min": 1.505,
+          "max": 1.5318,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.6453,
+          "min": 1.5099,
+          "max": 1.801,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.1122,
+          "min": 1.1089,
+          "max": 1.1175,
+          "pieces": 6
+        }
+      },
+      "mix": 1.424
+    },
+    "claude-sonnet-5": {
+      "framing_tokens": 6,
+      "kinds": {
+        "prose": {
+          "mean": 1.5144,
+          "min": 1.505,
+          "max": 1.5318,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.6453,
+          "min": 1.5099,
+          "max": 1.801,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.1122,
+          "min": 1.1089,
+          "max": 1.1175,
+          "pieces": 6
+        }
+      },
+      "mix": 1.424
+    },
+    "claude-fable-5": {
+      "framing_tokens": 6,
+      "kinds": {
+        "prose": {
+          "mean": 1.5144,
+          "min": 1.505,
+          "max": 1.5318,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.6453,
+          "min": 1.5099,
+          "max": 1.801,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.1122,
+          "min": 1.1089,
+          "max": 1.1175,
+          "pieces": 6
+        }
+      },
+      "mix": 1.424
+    },
+    "claude-opus-4-8": {
+      "framing_tokens": 6,
+      "kinds": {
+        "prose": {
+          "mean": 1.5144,
+          "min": 1.505,
+          "max": 1.5318,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.6453,
+          "min": 1.5099,
+          "max": 1.801,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.1122,
+          "min": 1.1089,
+          "max": 1.1175,
+          "pieces": 6
+        }
+      },
+      "mix": 1.424
+    },
+    "claude-opus-4-7": {
+      "framing_tokens": 11,
+      "kinds": {
+        "prose": {
+          "mean": 1.5145,
+          "min": 1.505,
+          "max": 1.5318,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.6452,
+          "min": 1.5099,
+          "max": 1.8004,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.1125,
+          "min": 1.1094,
+          "max": 1.118,
+          "pieces": 6
+        }
+      },
+      "mix": 1.4241
+    },
+    "claude-sonnet-4-6": {
+      "framing_tokens": 7,
+      "kinds": {
+        "prose": {
+          "mean": 1.1105,
+          "min": 1.1028,
+          "max": 1.1189,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.2697,
+          "min": 1.1896,
+          "max": 1.3501,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.0474,
+          "min": 1.0464,
+          "max": 1.0487,
+          "pieces": 6
+        }
+      },
+      "mix": 1.1425
+    },
+    "claude-opus-4-6": {
+      "framing_tokens": 7,
+      "kinds": {
+        "prose": {
+          "mean": 1.1105,
+          "min": 1.1028,
+          "max": 1.1189,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.2697,
+          "min": 1.1896,
+          "max": 1.3501,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.0474,
+          "min": 1.0464,
+          "max": 1.0487,
+          "pieces": 6
+        }
+      },
+      "mix": 1.1425
+    },
+    "claude-opus-4-5-20251101": {
+      "framing_tokens": 7,
+      "kinds": {
+        "prose": {
+          "mean": 1.1105,
+          "min": 1.1028,
+          "max": 1.1189,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.2697,
+          "min": 1.1896,
+          "max": 1.3501,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.0474,
+          "min": 1.0464,
+          "max": 1.0487,
+          "pieces": 6
+        }
+      },
+      "mix": 1.1425
+    },
+    "claude-haiku-4-5-20251001": {
+      "framing_tokens": 7,
+      "kinds": {
+        "prose": {
+          "mean": 1.1105,
+          "min": 1.1028,
+          "max": 1.1189,
+          "pieces": 3
+        },
+        "code": {
+          "mean": 1.2697,
+          "min": 1.1896,
+          "max": 1.3501,
+          "pieces": 6
+        },
+        "digits": {
+          "mean": 1.0474,
+          "min": 1.0464,
+          "max": 1.0487,
+          "pieces": 6
+        }
+      },
+      "mix": 1.1425
+    }
+  }
+}

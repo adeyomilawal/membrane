@@ -100,7 +100,7 @@ def test_the_budget_is_scaled_for_models_that_count_more():
         max_tokens=budget, model_id=MODEL, **kw
     ).metadata
     claude = compile_anonymous(max_tokens=budget, model_id="claude-opus-5-5", **kw).metadata
-    assert claude["token_scale"] == 1.5 and claude["tokens_budget_counted"] == int(budget / 1.5)
+    assert claude["token_scale"] == 1.51 and claude["tokens_budget_counted"] == int(budget / 1.51)
     assert claude["budget_exceeded"] is True
     fixed = compile_anonymous(max_tokens=budget, model_id="claude-opus-5-5", token_scale=1.0, **kw)
     assert "budget_exceeded" not in fixed.metadata

@@ -46,6 +46,19 @@ def test_registry_has_cache_prices_per_model():
     assert (opus.mode, opus.write, opus.read, opus.min_tokens) == ("marked", 1.25, 0.05, 512)
     assert get_cache_pricing("anthropic/claude-opus-4-6").min_tokens == 4096
     assert get_cache_pricing("claude-sonnet-4-5-20250929").read == 0.1
+    # Checked against the providers' pricing pages on 2026-11-11.
+    sonnet = get_cache_pricing("claude-sonnet-5-5")
+    assert (sonnet.read, sonnet.min_tokens) == (0.05, 512)
+    fable = get_cache_pricing("claude-fable-5-2")
+    assert (fable.write, fable.read, fable.min_tokens) == (1.25, 0.025, 512)
+    assert get_cache_pricing("claude-fable-5").read == 0.1
+    assert get_cache_pricing("claude-opus-4-7").min_tokens == 2048
+    assert get_cache_pricing("claude-opus-4-8").min_tokens == 1024
+    assert get_cache_pricing("claude-haiku-4-5").min_tokens == 4096
+    assert get_cache_pricing("gpt-5.1").read == 0.1
+    # Retired models are not in the map at all: no caching is assumed for them.
+    for retired in ("gpt-4-turbo", "claude-3-5-sonnet", "claude-3-7-sonnet", "claude-3-opus"):
+        assert get_cache_pricing(retired) is None
     gpt = get_cache_pricing("gpt-4o")
     assert (gpt.mode, gpt.write, gpt.read, gpt.min_tokens) == ("automatic", 1.0, 0.5, 1024)
     assert not gpt.marked and opus.marked

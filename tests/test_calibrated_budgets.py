@@ -28,8 +28,14 @@ def _billed(result) -> int:
 
 def test_the_registry_seeds_the_scale_per_model():
     assert get_token_scale("gpt-4o") == 1.0
-    assert get_token_scale("claude-opus-5-5") == 1.5
-    assert get_token_scale("anthropic/claude-sonnet-4.5") == 1.2
+    # Measured with benchmarks/measure_token_scale.py (prose): two tokenizer generations.
+    assert get_token_scale("claude-opus-5-5") == 1.51
+    assert get_token_scale("claude-haiku-5-5") == 1.51
+    assert get_token_scale("claude-opus-4-7") == 1.51
+    assert get_token_scale("claude-opus-4-6") == 1.11
+    assert get_token_scale("claude-haiku-4-5-20251001") == 1.11
+    assert get_token_scale("anthropic/claude-sonnet-4.5") == 1.11
+    assert get_token_scale("claude-3-opus") == 1.0  # retired, no entry
     assert get_token_scale("some-local-model") == 1.0
     assert get_token_scale(None) == 1.0
 
@@ -37,9 +43,9 @@ def test_the_registry_seeds_the_scale_per_model():
 def test_the_first_compile_already_budgets_in_the_providers_tokens():
     r = _compile(ContextCompiler(max_tokens=1500, model_id=CLAUDE))
     md = r.metadata
-    assert md["token_scale"] == 1.5 and md["token_scale_samples"] == 0
-    assert md["tokens_budget"] == 1500 and md["tokens_budget_counted"] == 1000
-    assert _billed(r) <= 1000
+    assert md["token_scale"] == 1.51 and md["token_scale_samples"] == 0
+    assert md["tokens_budget"] == 1500 and md["tokens_budget_counted"] == int(1500 / 1.51)
+    assert _billed(r) <= int(1500 / 1.51)
     # Without the scale the same request would have filled 1,500 counted tokens.
     plain = _compile(ContextCompiler(max_tokens=1500, model_id=CLAUDE, token_scale=1.0))
     assert 1000 < _billed(plain) <= 1500
@@ -113,7 +119,7 @@ def test_with_a_tokenizer_registry_the_counts_are_taken_as_exact():
     # Observations for the registry's counts do not leak into the plain estimate's scale.
     cc.observe(r, _billed(r) * 2)
     assert _compile(cc, tokenizer_registry=registry).metadata["token_scale"] > 1.0
-    assert _compile(cc).metadata["token_scale"] == 1.5
+    assert _compile(cc).metadata["token_scale"] == 1.51
 
 
 def test_the_cacheable_minimum_is_checked_in_the_providers_tokens():
