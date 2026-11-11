@@ -190,13 +190,13 @@ def report(sc: hs.Scenario, table: dict[str, dict[str, Any]], seeds: int, model:
     out = [
         f"\n== {sc.name}: {sc.about}",
         f"   {sc.turns} turns, budget {sc.budget:,}, {seeds} seeds, {model}",
-        f"{'strategy':<18} {'prompt':>8} {'read':>5} {'write':>6} {'cost':>5} "
+        f"{'strategy':<20} {'prompt':>8} {'read':>5} {'write':>6} {'cost':>5} "
         + " ".join(f"{k:>8}" for k in kinds)
         + f" {'wrong':>6} {'errors':>7}",
     ]
     for name, row in table.items():
         out.append(
-            f"{name:<18} {row['prompt']:>8,} {100 * row['read']:>4.0f}% "
+            f"{name:<20} {row['prompt']:>8,} {100 * row['read']:>4.0f}% "
             f"{100 * row['write']:>5.0f}% {row['cost']:>5.0f} "
             + " ".join(f"{100 * row['accuracy'][k]:>7.0f}%" for k in kinds)
             + f" {row['wrong']:>6} {row['errors']:>7}"
@@ -208,12 +208,12 @@ def overall(results: dict[str, dict[str, dict[str, Any]]]) -> str:
     names = list(next(iter(results.values())))
     out = [
         "\n== overall: mean over scenarios",
-        f"{'strategy':<18} {'cost':>5} {'accuracy':>9} {'wrong':>6} {'errors':>7} {'refusals':>9}",
+        f"{'strategy':<20} {'cost':>5} {'accuracy':>9} {'wrong':>6} {'errors':>7} {'refusals':>9}",
     ]
     for name in names:
         rows = [table[name] for table in results.values()]
         out.append(
-            f"{name:<18} {sum(r['cost'] for r in rows) / len(rows):>5.0f} "
+            f"{name:<20} {sum(r['cost'] for r in rows) / len(rows):>5.0f} "
             f"{100 * sum(r['accuracy_all'] for r in rows) / len(rows):>8.0f}% "
             f"{sum(r['wrong'] for r in rows):>6} {sum(r['errors'] for r in rows):>7} "
             f"{sum(r['refusals'] for r in rows):>9}"

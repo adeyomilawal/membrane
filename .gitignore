@@ -37,3 +37,6 @@ htmlcov/
 # Planning & roadmap (local / internal; not shipped with the wheel)
 BUILD_PLAN.md
 future.md
+
+# Node packages for benchmarks/priompt_node (real Priompt); install locally, never commit
+node_modules/

@@ -81,3 +81,61 @@ def test_existing_scenarios_did_not_change():
     assert digest.hexdigest() == (
         "e81d16eda3300ca8ff033a27aa8ad5c653a9e54a8f710aedde16435b8a7d639f"
     )
+
+
+def test_priompt_node_builds_from_the_cutoff_the_package_returns(monkeypatch):
+    """No Node needed: the package's answer is faked, the request is assembled here."""
+    sc = BY_NAME["tools"]
+    turns = hs.build_scenario(sc, 1)
+    history: list[hs.Message] = []
+    for turn in turns[:6]:
+        history = [*history, {"role": "user", "content": turn.user}, *turn.follow]
+    asked: list[dict] = []
+
+    def fake(cls, request):
+        asked.append(request)
+        return {"cutoff": 1_004, "tokens": 0}
+
+    monkeypatch.setattr(hs.PriomptNode, "_ask", classmethod(fake))
+    strategy = hs.PriomptNode.__new__(hs.PriomptNode)
+    strategy.budget = 1_000_000
+    messages, glued = strategy.build(turns[6], history)
+    assert not glued and not hs.orphaned_tools(messages)
+    # Turns 4 and 5 (priority 1004, 1005) and every memory are at or above the cutoff.
+    assert [m["content"] for m in messages if m["role"] == "user"] == [
+        turns[4].user, turns[5].user, turns[6].user
+    ]
+    assert all(m.content in messages[0]["content"] for m in turns[6].memories)
+    request = asked[0]
+    assert [t["prio"] for t in request["history"]] == [1_000 + i for i in range(6)]
+    roles = [m["role"] for m in request["history"][0]["messages"]]
+    assert roles == ["user", "assistant", "tool", "assistant"]
+    assert "lookup_badge" in request["history"][0]["messages"][1]["content"]
+
+    # Over budget after the package's cutoff: the shared glue trims and reports it.
+    strategy.budget = hs.billed(messages) - 1
+    trimmed, glued = strategy.build(turns[6], history)
+    assert glued and hs.billed(trimmed) <= strategy.budget
+
+
+def test_priompt_node_is_skipped_without_node(monkeypatch):
+    monkeypatch.setattr(hs.shutil, "which", lambda name: None)
+    ready, missing = hs.available_strategies()
+    assert "priompt-node" in missing and "priompt-node-recent" in missing
+    assert "priompt" in ready and "membrane" in ready
+
+
+def test_priompt_node_agrees_with_the_reimplementation_when_installed():
+    try:
+        real = hs.PriomptNode(3_000, BY_NAME["tiny"])
+    except ImportError:
+        import pytest
+
+        pytest.skip("node or benchmarks/priompt_node/node_modules missing")
+    sc = BY_NAME["tiny"]
+    scores = hs.run_scenario(sc, 1, {"naive": hs.Naive, "py": hs.Priompt, "node": type(real)})
+    table = {n: hs.summarize(s, scores["naive"]) for n, s in scores.items()}
+    assert table["node"]["invalid"] == 0
+    # Same priorities, slightly different token accounting: within 2% of each other.
+    assert abs(table["node"]["tokens"] - table["py"]["tokens"]) <= 0.02 * table["py"]["tokens"]
+    assert table["node"]["recall"] == table["py"]["recall"]

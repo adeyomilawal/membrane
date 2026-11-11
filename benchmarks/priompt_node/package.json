@@ -1,0 +1,9 @@
+{
+  "name": "membrane-priompt-bench",
+  "private": true,
+  "description": "Runs the real @anysphere/priompt renderer for benchmarks/hard_suite.py",
+  "type": "module",
+  "dependencies": {
+    "@anysphere/priompt": "0.2.1"
+  }
+}

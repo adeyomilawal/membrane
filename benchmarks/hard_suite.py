@@ -18,6 +18,10 @@ Products under test:
 - ``priompt`` / ``priompt-recent``: Priompt's priority-cutoff search, reimplemented (the
   package is JavaScript). One element per conversation turn. ``priompt`` ranks memories
   above history; ``priompt-recent`` ranks the last three turns above memories.
+- ``priompt-node`` / ``priompt-node-recent``: the real ``@anysphere/priompt`` package, run
+  through Node with the same elements and priorities. Needs ``node`` on the path and
+  ``npm install`` run once in ``benchmarks/priompt_node``; skipped otherwise. The package
+  decides the priority cutoff with its own renderer and token counts.
 - ``membrane``: ``ContextCompiler`` defaults.
 - ``membrane-lean``: ``recall_evicted_history=False``.
 
@@ -53,6 +57,7 @@ those the recall check needs every sentence that carries part of the fact.
   separated from its call, which providers reject.
 - ``ms``: median build time per turn. The harness pre-counts tokens for naive, LangChain
   and Priompt, so their times are lower bounds; Membrane and LlamaIndex tokenize inside.
+  ``priompt-node`` times include a round trip to the Node process.
 
 Run: ``uv run --extra langchain --extra llamaindex python -m benchmarks.hard_suite``
 Options: ``--scenario NAME`` (repeatable), ``--seeds N``, ``--json PATH``.
@@ -61,14 +66,19 @@ Options: ``--scenario NAME`` (repeatable), ``--seeds N``, ``--json PATH``.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import random
+import shutil
 import statistics
+import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 from itertools import pairwise
+from pathlib import Path
 from typing import Any, ClassVar
 
 from benchmarks.peer_comparison import CORE, PROJECTS
@@ -509,7 +519,7 @@ class Priompt:
     def __init__(self, budget: int, sc: Scenario) -> None:
         self.budget = budget
 
-    def build(self, turn: Turn, history: list[Message]) -> tuple[list[Message], bool]:
+    def _elements(self, turn: Turn, history: list[Message]) -> list[tuple[int, str, Any]]:
         starts = [*_turn_starts(history), len(history)]
         groups = [history[a:b] for a, b in pairwise(starts)]
         first_recent = len(groups) - self.recent_turns
@@ -519,24 +529,101 @@ class Priompt:
         elements += [
             ((5_000 if i >= first_recent else 1_000) + i, "hist", g) for i, g in enumerate(groups)
         ]
+        return elements
 
-        def render(cutoff: int) -> list[Message]:
-            mems = [o for p, k, o in elements if k == "mem" and p >= cutoff]
-            hist = [m for p, k, g in elements if k == "hist" and p >= cutoff for m in g]
-            return _assemble(mems, hist, turn)
+    @staticmethod
+    def _render(elements: list[tuple[int, str, Any]], cutoff: float, turn: Turn) -> list[Message]:
+        mems = [o for p, k, o in elements if k == "mem" and p >= cutoff]
+        hist = [m for p, k, g in elements if k == "hist" and p >= cutoff for m in g]
+        return _assemble(mems, hist, turn)
 
+    def build(self, turn: Turn, history: list[Message]) -> tuple[list[Message], bool]:
+        elements = self._elements(turn, history)
         levels = [*sorted({p for p, _, _ in elements}), 1_000_000]
         lo, hi = 0, len(levels) - 1
         while lo < hi:
             mid = (lo + hi) // 2
-            if billed(render(levels[mid])) <= self.budget:
+            if billed(self._render(elements, levels[mid], turn)) <= self.budget:
                 hi = mid
             else:
                 lo = mid + 1
-        return render(levels[lo]), False
+        return self._render(elements, levels[lo], turn), False
 
 
 class PriomptRecent(Priompt):
+    recent_turns = 3
+
+
+class PriomptNode(Priompt):
+    """The real ``@anysphere/priompt`` package, run through Node (``benchmarks/priompt_node``).
+
+    The same elements and priorities as :class:`Priompt`, but the cutoff comes from the
+    package's own ``render`` with its own tokenizer (cl100k) and message accounting. The
+    request is then assembled here from that cutoff, and gets the same glue as the other
+    products when the package's count and the billed count disagree."""
+
+    _dir = Path(__file__).resolve().parent / "priompt_node"
+    _proc: ClassVar[Any] = None
+    _lock: ClassVar[Any] = threading.Lock()
+
+    def __init__(self, budget: int, sc: Scenario) -> None:
+        super().__init__(budget, sc)
+        if not shutil.which("node") or not (self._dir / "node_modules/@anysphere/priompt").is_dir():
+            raise ImportError("node and `npm install` in benchmarks/priompt_node are needed")
+
+    @classmethod
+    def _ask(cls, request: dict[str, Any]) -> dict[str, Any]:
+        with cls._lock:  # one Node process for the whole run; requests are answered in order
+            if cls._proc is None or cls._proc.poll() is not None:
+                cls._proc = subprocess.Popen(
+                    ["node", "render.cjs"], cwd=cls._dir, text=True, encoding="utf-8",
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                )
+                atexit.register(cls._proc.terminate)
+            cls._proc.stdin.write(json.dumps(request) + "\n")
+            cls._proc.stdin.flush()
+            return json.loads(cls._proc.stdout.readline())
+
+    @staticmethod
+    def _plain(m: Message) -> dict[str, str]:
+        """A chat message as role, text and name: a tool call is sent as its JSON."""
+        content = m.get("content")
+        if m.get("tool_calls"):
+            content = json.dumps(m["tool_calls"], sort_keys=True)
+        out = {"role": m["role"], "content": str(content or "")}
+        return {**out, "name": "lookup_badge"} if m["role"] == "tool" else out
+
+    def build(self, turn: Turn, history: list[Message]) -> tuple[list[Message], bool]:
+        elements = self._elements(turn, history)
+        memories = [(p, o) for p, k, o in elements if k == "mem"]
+        reply = self._ask(
+            {
+                "budget": self.budget,
+                "core": CORE,
+                "header": "\n\nRelevant memories:",
+                "memories": [
+                    {"prio": p, "text": f"\n[{i + 1}] {m.content}"}
+                    for i, (p, m) in enumerate(memories)
+                ],
+                "history": [
+                    {"prio": p, "messages": [self._plain(m) for m in g]}
+                    for p, k, g in elements
+                    if k == "hist"
+                ],
+                "question": turn.user,
+            }
+        )
+        # An error means even the core and the question are over the limit: keep nothing else.
+        cutoff = reply.get("cutoff", 1_000_000)
+        kept = self._render(elements, cutoff, turn)
+        if billed(kept) <= self.budget:
+            return kept, False
+        mems = [o for p, k, o in elements if k == "mem" and p >= cutoff]
+        hist = [m for p, k, g in elements if k == "hist" and p >= cutoff for m in g]
+        return _fit(mems, hist, turn, self.budget)
+
+
+class PriomptNodeRecent(PriomptNode):
     recent_turns = 3
 
 
@@ -574,6 +661,8 @@ STRATEGIES: dict[str, type] = {
     "llamaindex-memory": LlamaIndexMemory,
     "priompt": Priompt,
     "priompt-recent": PriomptRecent,
+    "priompt-node": PriomptNode,
+    "priompt-node-recent": PriomptNodeRecent,
     "membrane": Membrane,
     "membrane-lean": MembraneLean,
 }
@@ -664,7 +753,7 @@ def summarize(scores: list[Score], baseline: list[Score]) -> dict[str, Any]:
 def report(sc: Scenario, table: dict[str, dict[str, Any]], seeds: int) -> str:
     kinds = sorted({k for row in table.values() for k in row["recall"]})
     head = (
-        f"{'strategy':<18} {'tokens':>8} {'cached':>7} {'cost 0.5x':>10} {'cost 0.1x':>10} "
+        f"{'strategy':<20} {'tokens':>8} {'cached':>7} {'cost 0.5x':>10} {'cost 0.1x':>10} "
         + " ".join(f"{k:>8}" for k in kinds)
         + f" {'over':>5} {'invalid':>8} {'ms':>6}"
     )
@@ -676,7 +765,7 @@ def report(sc: Scenario, table: dict[str, dict[str, Any]], seeds: int) -> str:
     ]
     for name, row in table.items():
         out.append(
-            f"{name:<18} {row['tokens']:>8,} {100 * row['cached']:>6.0f}% "
+            f"{name:<20} {row['tokens']:>8,} {100 * row['cached']:>6.0f}% "
             f"{row['cost']['0.5x']:>10.0f} {row['cost']['0.1x']:>10.0f} "
             + " ".join(f"{100 * row['recall'][k]:>7.0f}%" for k in kinds)
             + f" {row['over']:>5} {row['invalid']:>8} {row['ms']:>6.1f}"
@@ -688,13 +777,13 @@ def overall(results: dict[str, dict[str, dict[str, Any]]]) -> str:
     names = list(next(iter(results.values())))
     out = [
         "\n== overall: mean over scenarios",
-        f"{'strategy':<18} {'cost 0.5x':>10} {'cost 0.1x':>10} {'recall':>7} {'over':>5} "
+        f"{'strategy':<20} {'cost 0.5x':>10} {'cost 0.1x':>10} {'recall':>7} {'over':>5} "
         f"{'invalid':>8}",
     ]
     for name in names:
         rows = [table[name] for table in results.values()]
         out.append(
-            f"{name:<18} {statistics.mean(r['cost']['0.5x'] for r in rows):>10.0f} "
+            f"{name:<20} {statistics.mean(r['cost']['0.5x'] for r in rows):>10.0f} "
             f"{statistics.mean(r['cost']['0.1x'] for r in rows):>10.0f} "
             f"{100 * statistics.mean(r['recall_all'] for r in rows):>6.0f}% "
             f"{sum(r['over'] for r in rows):>5} {sum(r['invalid'] for r in rows):>8}"
