@@ -209,10 +209,16 @@ def keyframes(
     Terms missing from ``df`` count as seen once. A sentence repeated in the text counts once.
     """
     n = max(n, 1)
-    scores = [
-        -sum(math.log(1.0 + n / df.get(t, 1)) for t in found) / len(found)
-        for _, found in _pieces(text)
-    ]
+    rarity: dict[str, float] = {}  # a long text repeats its terms
+    scores = []
+    for _, found in _pieces(text):
+        total = 0.0
+        for term in found:
+            weight = rarity.get(term)
+            if weight is None:
+                weight = rarity[term] = math.log(1.0 + n / df.get(term, 1))
+            total += weight
+        scores.append(-total / len(found))
     return _pick(text, _questions_last(text, scores), count_fn, cap, limit, [-x for x in scores])
 
 

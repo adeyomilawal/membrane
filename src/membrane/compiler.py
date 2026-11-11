@@ -13,11 +13,13 @@ import logging
 import math
 import re
 import time
+from bisect import bisect_left
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
+from itertools import islice
 from typing import Any
-from collections.abc import Awaitable, Callable, Sequence
 
 import membrane.config as os_config
 from membrane.async_preflight import get_preflight_cache, set_preflight_cache
@@ -33,10 +35,12 @@ from membrane.firewall import (
     TIER_PROCEDURAL,
     TIER_SEMANTIC,
     PreFlightContextFirewall,
+    _COUNT_CACHE_MAX_CHARS,
     _get_encoding,
     _ref_map_from_text,
     count_parts,
     count_tokens,
+    parts_add_up,
 )
 from membrane.keyframes import (
     DEFAULT_KEYFRAME_TOKENS,
@@ -562,6 +566,10 @@ class _IndexState:
     budget: int = 0  # tokens the block may hold, fixed at the cut that built this state
     trimmed: dict[int, tuple[str, ...]] = field(default_factory=dict)
 
+    def copy(self) -> _IndexState:
+        """A state the next cut can add to without changing this one."""
+        return _IndexState(lines=list(self.lines), df=dict(self.df), n=self.n)
+
     def add_cut(
         self,
         batch: Sequence[tuple[Any, ...]],
@@ -647,13 +655,52 @@ def _eviction_index(
     return state.within(budget, count_fn)
 
 
-def _recall_postings(candidates: Sequence[tuple[str, frozenset[str]]]) -> dict[str, list[int]]:
-    """For each term, the candidates that contain it."""
-    postings: dict[str, list[int]] = {}
-    for i, (_, found) in enumerate(candidates):
-        for term in found:
+def _recall_postings(
+    candidates: Sequence[tuple[str, frozenset[str]]],
+    postings: dict[str, list[int]] | None = None,
+    start: int = 0,
+) -> dict[str, list[int]]:
+    """For each term, the candidates that contain it, in ascending order. With ``postings``
+    and ``start``, the candidates from ``start`` on are added to what is already there."""
+    postings = {} if postings is None else postings
+    for i in range(start, len(candidates)):
+        for term in candidates[i][1]:
             postings.setdefault(term, []).append(i)
     return postings
+
+
+class _RecallIndex:
+    """Passages of a conversation's dropped messages and their postings, grown cut by cut.
+
+    Dropped history only grows at its end, so a later cut adds its messages' passages to
+    the same lists. ``ends[k]`` is how many passages the first ``k`` messages gave, so an
+    earlier cut (a shorter prefix of the same messages) reads the same lists up to its own
+    count.
+    """
+
+    def __init__(self) -> None:
+        self.key: tuple[tuple[Any, ...], ...] = ()
+        self.candidates: list[tuple[str, frozenset[str]]] = []
+        self.postings: dict[str, list[int]] = {}
+        self.ends: list[int] = [0]
+
+    def covers(self, key: tuple[tuple[Any, ...], ...]) -> bool:
+        """Whether ``key`` and the messages indexed so far are one conversation."""
+        shared = min(len(key), len(self.key))
+        return key[:shared] == self.key[:shared]
+
+    def upto(
+        self, key: tuple[tuple[Any, ...], ...], evicted: list[dict[str, Any]]
+    ) -> tuple[list[tuple[str, frozenset[str]]], dict[str, list[int]], int]:
+        """Candidates, postings and how many of the candidates belong to ``key``."""
+        for message in evicted[len(self.key) : len(key)]:
+            start = len(self.candidates)
+            self.candidates.extend(_recall_candidates([message]))
+            _recall_postings(self.candidates, self.postings, start)
+            self.ends.append(len(self.candidates))
+        if len(key) > len(self.key):
+            self.key = key
+        return self.candidates, self.postings, self.ends[len(key)]
 
 
 def _rank_postings(postings: dict[str, list[int]], n: int, query: str, limit: int) -> list[int]:
@@ -662,9 +709,11 @@ def _rank_postings(postings: dict[str, list[int]], n: int, query: str, limit: in
     hits: dict[int, float] = {}
     for term in sorted(_terms(query)):
         found = postings.get(term)
-        if found:
-            weight = math.log(1.0 + n / len(found))
-            for i in found:
+        # The postings may already hold later candidates (see _RecallIndex): stop at ``n``.
+        known = bisect_left(found, n) if found else 0
+        if known:
+            weight = math.log(1.0 + n / known)
+            for i in islice(found, known):
                 hits[i] = hits.get(i, 0.0) + weight
     ranked = sorted(hits, key=lambda i: (-hits[i], -i))[:limit]
     newest = n - 1
@@ -1282,7 +1331,17 @@ class ContextCompiler:
             # Extra grid steps only when this turn's own end block would not fit.
             limit = min(history_limit, base - index_cap - end_tokens)
             step = max(1, history_limit // 2)
-            sizes = [count_fn(_message_text(m)) + overhead for m in history]
+            # A long message (a pasted document) is over the shared count cache's size
+            # limit; remembered here, it is tokenised once instead of on every turn.
+            sizes = [
+                (
+                    self._big_count(text, count_fn, count_key)
+                    if len(text := _message_text(m)) > _COUNT_CACHE_MAX_CHARS
+                    else count_fn(text)
+                )
+                + overhead
+                for m in history
+            ]
             history, history_dropped = _trim_history_chunked(
                 history, limit, count_fn, step=step, sizes=sizes
             )
@@ -1322,7 +1381,20 @@ class ContextCompiler:
         if index_lines:
             block = "\n".join((_INDEX_HEADER, *index_lines))
             system_text = core_text + "\n\n" + block if core_text.strip() else block
-            system_tokens = self._big_count(system_text, count_fn, count_key)
+            if in_parts:
+                # Line by line (exact, see firewall.parts_add_up): a cut only tokenises the
+                # lines it adds, not the core and the whole index again.
+                lead = [core_text + "\n\n"] if core_text.strip() else []
+                lines = [_INDEX_HEADER, *index_lines]
+                parts = [*lead, *(f"{line}\n" for line in lines[:-1]), lines[-1]]
+                if parts_add_up(parts):
+                    system_tokens = sum(count_fn(part) for part in parts[len(lead) :])
+                    if lead:
+                        system_tokens += self._big_count(lead[0], count_fn, count_key)
+                else:
+                    system_tokens = self._big_count(system_text, count_fn, count_key)
+            else:
+                system_tokens = self._big_count(system_text, count_fn, count_key)
         # Under pressure, which memories survive is decided by the retriever's rank fused
         # with relevance to this turn; the survivors are still emitted in the given order.
         given_order: dict[str, int] = {}
@@ -1337,9 +1409,9 @@ class ContextCompiler:
         if self.recall_evicted_history and evicted:
             # Passages of dropped history, picked by relevance to this turn and then recency.
             # Capped at one chunk so recall does not inflate every request to the full budget.
-            candidates, postings = self._recall_index(evicted_key, evicted)
+            candidates, postings, known = self._recall_index(evicted_key, evicted)
             recall_cap, recalled = max(1, history_limit // 2), []
-            ranked = _rank_postings(postings, len(candidates), user_message, _RECALL_SCAN)
+            ranked = _rank_postings(postings, known, user_message, _RECALL_SCAN)
             for i in ranked:
                 text = candidates[i][0]
                 cost = line_cost(text)
@@ -1570,14 +1642,17 @@ class ContextCompiler:
         state = self._index_cache.get(key)
         if state is None:
             starts = _cut_starts(full_history, sizes, step, len(evicted))
-            previous = starts[-2] if len(starts) > 1 else 0
-            state = self._index_cache.pop((evicted[:previous], step, cap, count_key), None)
+            # Continue from the latest earlier cut still at hand. Earlier cuts stay cached:
+            # a turn with a long question can push the cut ahead for that turn only.
+            state, previous, done = None, 0, 0
+            for position in range(len(starts) - 2, -1, -1):
+                earlier = self._index_cache.get((evicted[: starts[position]], step, cap, count_key))
+                if earlier is not None:
+                    state, previous, done = earlier.copy(), starts[position], position + 1
+                    break
             if state is None:
-                state, previous = _IndexState(), 0
-                starts_left = starts
-            else:
-                starts_left = starts[-1:]
-            for start in starts_left:
+                state = _IndexState()
+            for start in starts[done:]:
                 state.add_cut(evicted[previous:start], count_fn, cap)
                 previous = start
             while len(self._index_cache) >= _INDEX_CACHE_SIZE:
@@ -1590,16 +1665,17 @@ class ContextCompiler:
         self,
         key: tuple[tuple[Any, ...], ...],
         evicted: list[dict[str, Any]],
-    ) -> tuple[list[tuple[str, frozenset[str]]], dict[str, list[int]]]:
-        """Passages of the dropped history and their postings, built once per cut."""
-        found = self._recall_cache.get(key)
-        if found is None:
-            candidates = _recall_candidates(evicted)
-            found = (candidates, _recall_postings(candidates))
+    ) -> tuple[list[tuple[str, frozenset[str]]], dict[str, list[int]], int]:
+        """Passages of the dropped history, their postings, and how many passages count.
+        Kept per conversation (told apart by its first dropped message) and grown by the
+        messages each cut adds, so a cut only splits what it drops."""
+        index = self._recall_cache.get(key[0])
+        if index is None or not index.covers(key):
+            self._recall_cache.pop(key[0], None)
             while len(self._recall_cache) >= _INDEX_CACHE_SIZE:
                 self._recall_cache.pop(next(iter(self._recall_cache)))
-            self._recall_cache[key] = found
-        return found
+            index = self._recall_cache[key[0]] = _RecallIndex()
+        return index.upto(key, evicted)
 
     def _policy_max_tokens(self, policy_kw: dict[str, Any]) -> int:
         """Budget after policies: ``set_max_tokens`` / ``override.max_tokens`` replace it,
