@@ -12,7 +12,9 @@ pronoun ("It ended at ...", "That was ...") or has at most three words. A keyfra
 the sentence and such neighbours after it (up to three sentences), scored by its best
 sentence, when together they fit the cap and the neighbour says enough: one with a pronoun
 must be at least half as dense as the best sentence, a very short one must be the densest.
-Otherwise the keyframe is the single sentence. Pure functions, no model calls.
+Otherwise the keyframe is the single sentence. A sentence that ends in a question mark ranks
+behind every statement: it is the keyframe only when the text has nothing else that fits.
+Pure functions, no model calls.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ _OPENER, _SHORT = 1, 2
 # the best sentence of the keyframe. A very short one ("Not 4471.") only when it is the
 # densest itself: "Understood." after a fact adds tokens and nothing else.
 _LEAN_DENSITY = 0.5
+_QUESTION_PENALTY = 1e6  # more than any score, less than "no match" (infinity)
 _SHORT_SENTENCE_TERMS = 3
 _SPAN_SENTENCES = 3
 
@@ -104,6 +107,15 @@ def _spans(text: str) -> tuple[tuple[int, int], ...]:
                 break
             spans.append((i, end))
     return tuple(spans)
+
+
+def _questions_last(text: str, scores: list[float]) -> list[float]:
+    """Scores (lower is better) with every question behind every statement: a question says
+    what someone wanted to know, rarely the thing itself. Their order among themselves stays."""
+    return [
+        score + _QUESTION_PENALTY if piece.endswith("?") else score
+        for score, (piece, _) in zip(scores, _pieces(text), strict=True)
+    ]
 
 
 def _pick(
@@ -201,7 +213,7 @@ def keyframes(
         -sum(math.log(1.0 + n / df.get(t, 1)) for t in found) / len(found)
         for _, found in _pieces(text)
     ]
-    return _pick(text, scores, count_fn, cap, limit, [-score for score in scores])
+    return _pick(text, _questions_last(text, scores), count_fn, cap, limit, [-x for x in scores])
 
 
 def keyframe(
@@ -234,5 +246,5 @@ def matching_sentence(
     matching = [score if score < 0 else math.inf for score in scores]
     if all(score == math.inf for score in matching):
         return None
-    found = _pick(text, matching, count_fn, cap, 1)
+    found = _pick(text, _questions_last(text, matching), count_fn, cap, 1)
     return found[0] if found else None

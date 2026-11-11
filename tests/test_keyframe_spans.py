@@ -86,3 +86,23 @@ def test_matching_sentence_brings_the_leaning_sentence_that_holds_the_answer():
 def test_single_sentence_texts_are_unchanged():
     df, n = sentence_frequency(FILLER)
     assert keyframe("The door code is 4417.", df, n, count_tokens) == "The door code is 4417."
+
+
+def test_a_question_ranks_behind_every_statement():
+    text = "Which Zanzibar ferry leaves from pier Q7 on Thursdays? We talked about the plans."
+    assert _kf(text) == ["We talked about the plans."]
+    # Among questions the densest still wins, and a text of only questions keeps one.
+    assert _kf("Is that all? Which Zanzibar ferry leaves from pier Q7?") == [
+        "Which Zanzibar ferry leaves from pier Q7?"
+    ]
+    # A statement that leans on a question still brings it along.
+    text = "We talked a lot. Which ferry goes to Zanzibar? It leaves from pier Q7 at 0730."
+    assert _kf(text) == ["Which ferry goes to Zanzibar? It leaves from pier Q7 at 0730."]
+
+
+def test_matching_prefers_the_statement_to_the_question_that_shares_more():
+    text = "What is the locker code for trip 12 again? The code for that trip is L9920. Bye now."
+    wanted = terms("what is the locker code for trip 12")
+    assert matching_sentence(text, wanted, count_tokens, 40) == "The code for that trip is L9920."
+    only = "What is the locker code for trip 12 again?"
+    assert matching_sentence(only, wanted, count_tokens, 40) == only
